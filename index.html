@@ -1,0 +1,1962 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Local Mafia</title>
+
+  <!-- PeerJS (CDN snippet shown in PeerJS docs) -->
+  <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+
+  <style>
+    :root{
+      --bg: #0b0d12;
+      --panel: rgba(255,255,255,.06);
+      --panel2: rgba(255,255,255,.10);
+      --border: rgba(255,255,255,.12);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.70);
+      --hint: rgba(255,255,255,.55);
+      --danger: #ff4d4d;
+      --ok: #4dffb1;
+      --accent: #9aa8ff;
+      --shadow: 0 20px 50px rgba(0,0,0,.35);
+      --radius: 18px;
+      --radius2: 14px;
+      --tap: 52px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    [data-theme="light"]{
+      --bg: #f5f6fb;
+      --panel: rgba(0,0,0,.04);
+      --panel2: rgba(0,0,0,.06);
+      --border: rgba(0,0,0,.10);
+      --text: rgba(0,0,0,.88);
+      --muted: rgba(0,0,0,.66);
+      --hint: rgba(0,0,0,.50);
+      --danger: #d12c2c;
+      --ok: #158f5d;
+      --accent: #4a62ff;
+      --shadow: 0 20px 50px rgba(0,0,0,.12);
+    }
+
+    *{ box-sizing: border-box; }
+    html, body{ height: 100%; }
+    body{
+      margin: 0;
+      font-family: var(--sans);
+      background: radial-gradient(1200px 900px at 20% -10%, rgba(154,168,255,.18), transparent 60%),
+                  radial-gradient(900px 700px at 110% 20%, rgba(77,255,177,.12), transparent 60%),
+                  var(--bg);
+      color: var(--text);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .app{
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 14px 14px 24px;
+      padding-bottom: max(24px, env(safe-area-inset-bottom));
+    }
+
+    header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 10px;
+      padding: 10px 6px 6px;
+    }
+    .brand{
+      display:flex; flex-direction:column; gap:2px;
+      min-width: 0;
+    }
+    .title{
+      font-weight: 720;
+      letter-spacing: .2px;
+      font-size: 20px;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow:hidden;
+      text-overflow: ellipsis;
+    }
+    .subtitle{
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: .2px;
+    }
+
+    .top-actions{
+      display:flex;
+      gap: 10px;
+      align-items:center;
+    }
+
+    .btn{
+      height: var(--tap);
+      padding: 0 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap: 8px;
+      font-weight: 650;
+      letter-spacing: .2px;
+      cursor:pointer;
+      user-select:none;
+      box-shadow: 0 10px 30px rgba(0,0,0,.15);
+      transition: transform .06s ease, background .15s ease, border-color .15s ease, opacity .15s ease;
+    }
+    .btn:active{ transform: translateY(1px) scale(.99); }
+    .btn.primary{
+      background: linear-gradient(180deg, rgba(154,168,255,.22), rgba(154,168,255,.10));
+      border-color: rgba(154,168,255,.30);
+    }
+    .btn.danger{
+      background: linear-gradient(180deg, rgba(255,77,77,.22), rgba(255,77,77,.10));
+      border-color: rgba(255,77,77,.28);
+    }
+    .btn.ghost{
+      background: transparent;
+      box-shadow:none;
+    }
+    .btn.small{
+      height: 42px;
+      padding: 0 12px;
+      border-radius: 12px;
+      font-size: 13px;
+    }
+    .btn:disabled{
+      opacity:.55;
+      cursor:not-allowed;
+      transform:none;
+    }
+
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 10px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 13px;
+      box-shadow: var(--shadow);
+    }
+    .chip code{
+      font-family: var(--mono);
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: 2px;
+      font-size: 14px;
+    }
+
+    .card{
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--panel), rgba(255,255,255,.02));
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+    .card h2{
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: .2px;
+    }
+    .hint{
+      margin: 6px 0 0;
+      color: var(--hint);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .row{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+
+    .field{
+      width: 100%;
+      display:flex;
+      flex-direction:column;
+      gap: 8px;
+      margin: 10px 0;
+    }
+    label{
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: .2px;
+    }
+    input{
+      height: var(--tap);
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      outline: none;
+      padding: 0 14px;
+      font-size: 16px;
+    }
+    input::placeholder{ color: rgba(255,255,255,.35); }
+    [data-theme="light"] input::placeholder{ color: rgba(0,0,0,.35); }
+    input:focus{
+      border-color: rgba(154,168,255,.50);
+      box-shadow: 0 0 0 4px rgba(154,168,255,.12);
+    }
+
+    .views{ margin-top: 4px; }
+    .view{ display:none; }
+    .view.active{ display:block; }
+
+    .split{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    @media(min-width: 860px){
+      .split{ grid-template-columns: 1.05fr .95fr; }
+    }
+
+    .list{
+      margin: 10px 0 0;
+      display:flex;
+      flex-direction:column;
+      gap: 8px;
+    }
+    .item{
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: var(--radius2);
+      padding: 12px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 10px;
+    }
+    .who{
+      display:flex;
+      flex-direction:column;
+      gap:2px;
+      min-width: 0;
+    }
+    .who .name{
+      font-weight: 700;
+      letter-spacing:.2px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .who .meta{
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .badges{
+      display:flex;
+      gap: 8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .badge{
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .badge.dead{ border-color: rgba(255,77,77,.26); color: var(--danger); }
+    .badge.alive{ border-color: rgba(77,255,177,.22); color: var(--ok); }
+    .badge.silenced{ border-color: rgba(255,215,77,.26); color: #ffcf4d; }
+    .badge.me{ border-color: rgba(154,168,255,.30); color: var(--accent); }
+    .badge.host{ border-color: rgba(154,168,255,.30); color: var(--accent); }
+
+    .phase{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 10px;
+      margin-top: 6px;
+    }
+    .phase .big{
+      font-weight: 820;
+      letter-spacing: .2px;
+      font-size: 18px;
+    }
+    .phase .sub{
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 2px;
+    }
+
+    .narrator{
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,.12);
+      border-radius: var(--radius2);
+      padding: 12px;
+      min-height: 88px;
+    }
+    [data-theme="light"] .narrator{ background: rgba(255,255,255,.65); }
+    .narrator .line{
+      font-size: 14px;
+      color: var(--text);
+      line-height: 1.35;
+      margin: 6px 0;
+    }
+    .narrator .line.muted{ color: var(--muted); }
+    .narrator .line.danger{ color: var(--danger); }
+    .narrator .line.ok{ color: var(--ok); }
+
+    .role-card{
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(154,168,255,.12), rgba(255,255,255,.02));
+      border-radius: var(--radius2);
+      padding: 12px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+    }
+    .role-left{ display:flex; align-items:center; gap: 10px; min-width:0; }
+    .role-icon{
+      width: 44px; height: 44px; border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      display:flex; align-items:center; justify-content:center;
+      font-size: 22px;
+      flex: none;
+    }
+    .role-name{
+      font-weight: 820;
+      letter-spacing:.2px;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .role-desc{ font-size: 13px; color: var(--muted); margin-top:2px; }
+
+    .targets{
+      margin-top: 10px;
+      display:flex;
+      flex-direction:column;
+      gap: 10px;
+    }
+    .targets .grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    @media(min-width: 520px){
+      .targets .grid{ grid-template-columns: 1fr 1fr; }
+    }
+
+    .footer-actions{
+      margin-top: 12px;
+      display:flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .toast{
+      position: fixed;
+      left: 50%;
+      bottom: 16px;
+      transform: translateX(-50%);
+      max-width: min(720px, calc(100% - 24px));
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,.65);
+      color: rgba(255,255,255,.94);
+      box-shadow: var(--shadow);
+      display:none;
+      z-index: 50;
+      font-size: 13px;
+      line-height: 1.35;
+      backdrop-filter: blur(10px);
+    }
+    [data-theme="light"] .toast{
+      background: rgba(255,255,255,.85);
+      color: rgba(0,0,0,.88);
+    }
+    .toast.show{ display:block; }
+
+    .divider{
+      height: 1px;
+      background: var(--border);
+      margin: 12px 0;
+    }
+
+    /* Make tap targets comfy on small screens */
+    @media(max-width: 420px){
+      .btn{ width: 100%; }
+      .top-actions .btn{ width: auto; }
+      .footer-actions .btn{ width: 100%; }
+    }
+  </style>
+</head>
+
+<body data-theme="dark">
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="title">Local Mafia</div>
+        <div class="subtitle">Serverless, local multiplayer • Peer-to-peer</div>
+      </div>
+      <div class="top-actions">
+        <button id="btnTheme" class="btn small primary" title="Toggle Day/Night theme">
+          <span id="themeIcon">🌙</span>
+          <span id="themeLabel">Night</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="views">
+      <!-- HOME -->
+      <section id="viewHome" class="view active">
+        <div class="split">
+          <div class="card">
+            <h2>Host a game</h2>
+
+            <div class="field">
+              <label for="inpName">Your name</label>
+              <input id="inpName" maxlength="18" placeholder="e.g., Aditi" />
+            </div>
+
+            <div class="row">
+              <button id="btnHost" class="btn primary">Host Game</button>
+            </div>
+
+            <p class="hint">
+              You’ll get a 4‑character room code. Keep this tab open—Host is the “server”.
+            </p>
+          </div>
+
+          <div class="card">
+            <h2>Join a game</h2>
+
+            <div class="field">
+              <label for="inpJoinName">Your name</label>
+              <input id="inpJoinName" maxlength="18" placeholder="e.g., Rohan" />
+            </div>
+
+            <div class="field">
+              <label for="inpRoom">Room code (4 chars)</label>
+              <input id="inpRoom" maxlength="4" placeholder="ABCD" autocapitalize="characters" />
+            </div>
+
+            <div class="row">
+              <button id="btnJoin" class="btn primary">Join Game</button>
+            </div>
+
+            <p class="hint">
+              Tip: Everyone should be on the same Wi‑Fi for the easiest connectivity.
+            </p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>How it works</h2>
+          <p class="hint">
+            One Host manages the authoritative game state and broadcasts updates.
+            Everyone else sends actions (night abilities, votes) to the Host.
+          </p>
+        </div>
+      </section>
+
+      <!-- LOBBY -->
+      <section id="viewLobby" class="view">
+        <div class="card">
+          <div class="row" style="justify-content:space-between; align-items:flex-start;">
+            <div>
+              <h2 style="margin-bottom:6px;">Lobby</h2>
+              <div class="chip">Room <code id="roomCode">----</code></div>
+              <div class="hint" style="margin-top:8px;">
+                Share this code. When ready, Host starts the game.
+              </div>
+            </div>
+            <div class="row" style="justify-content:flex-end;">
+              <button id="btnCopyCode" class="btn small">Copy</button>
+              <button id="btnLeaveLobby" class="btn small danger">Leave</button>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="row" style="justify-content:space-between; align-items:center;">
+            <div class="chip" id="chipNet">Status <span id="netStatus" style="font-weight:800; color:var(--text);">Idle</span></div>
+            <div class="row">
+              <button id="btnStartGame" class="btn primary" disabled>Start Game</button>
+            </div>
+          </div>
+
+          <div class="list" id="lobbyPlayers"></div>
+
+          <p class="hint" id="lobbyHint"></p>
+        </div>
+      </section>
+
+      <!-- GAME -->
+      <section id="viewGame" class="view">
+        <div class="card">
+          <div class="phase">
+            <div>
+              <div class="big" id="phaseTitle">—</div>
+              <div class="sub" id="phaseSub">—</div>
+            </div>
+            <div class="row" style="justify-content:flex-end;">
+              <button id="btnLeaveGame" class="btn small danger">Leave</button>
+            </div>
+          </div>
+
+          <div class="narrator" id="narrator"></div>
+
+          <div class="role-card" id="roleCard" style="display:none;">
+            <div class="role-left">
+              <div class="role-icon" id="roleIcon">🎭</div>
+              <div style="min-width:0;">
+                <div class="role-name" id="roleName">Role</div>
+                <div class="role-desc" id="roleDesc">—</div>
+              </div>
+            </div>
+            <div class="badges">
+              <span class="badge me">You</span>
+              <span class="badge" id="badgeAlive">—</span>
+            </div>
+          </div>
+
+          <div class="targets" id="actionArea"></div>
+
+          <div class="footer-actions" id="hostControls" style="display:none;">
+            <button id="btnHostToVote" class="btn primary">Start Voting</button>
+            <button id="btnHostResolveVote" class="btn">Resolve Vote</button>
+            <button id="btnHostNextNight" class="btn">Next Night</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Players</h2>
+          <div class="list" id="gamePlayers"></div>
+          <p class="hint" id="gameHint"></p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    /********************************************************************
+     * Local Mafia (single-file, serverless, PeerJS)
+     * ---------------------------------------------------------------
+     * IMPORTANT CONCEPT:
+     * - Host acts as an authoritative "server" (in-browser).
+     * - Clients connect P2P to Host via PeerJS DataConnections.
+     * - Host owns the game state and broadcasts snapshots.
+     *
+     * This design keeps logic simple and avoids desync: clients never
+     * change state directly; they request actions; Host validates and applies.
+     ********************************************************************/
+
+    /**********************
+     * Small DOM helpers
+     **********************/
+    const $ = (sel) => document.querySelector(sel);
+    const el = (tag, attrs={}, children=[]) => {
+      const n = document.createElement(tag);
+      for (const [k,v] of Object.entries(attrs)){
+        if (k === "class") n.className = v;
+        else if (k === "text") n.textContent = v;
+        else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
+        else n.setAttribute(k, v);
+      }
+      for (const c of children) n.appendChild(c);
+      return n;
+    };
+
+    /**********************
+     * Views (SPA)
+     **********************/
+    const views = {
+      home: $("#viewHome"),
+      lobby: $("#viewLobby"),
+      game: $("#viewGame"),
+    };
+    function showView(name){
+      for (const [k, node] of Object.entries(views)){
+        node.classList.toggle("active", k === name);
+      }
+    }
+
+    /**********************
+     * Theme toggle
+     * - Default = Night (dark)
+     * - During the game, the phase enforces theme (Night => dark, Day/Vote => light)
+     *   to match the "Day/Night" mafia aesthetic.
+     **********************/
+    let manualTheme = "dark"; // for home/lobby preference
+    function setTheme(theme){
+      document.body.setAttribute("data-theme", theme);
+      const isLight = theme === "light";
+      $("#themeIcon").textContent = isLight ? "☀️" : "🌙";
+      $("#themeLabel").textContent = isLight ? "Day" : "Night";
+    }
+    $("#btnTheme").addEventListener("click", () => {
+      manualTheme = (document.body.getAttribute("data-theme") === "dark") ? "light" : "dark";
+      setTheme(manualTheme);
+      toast("Theme set to " + (manualTheme === "dark" ? "Night" : "Day"));
+    });
+
+    // Apply phase theme: called whenever we render a new game state.
+    function applyPhaseTheme(phase){
+      if (phase === "night") setTheme("dark");
+      else if (phase === "day" || phase === "vote" || phase === "ended") setTheme("light");
+      else setTheme(manualTheme); // lobby/home
+    }
+
+    /**********************
+     * Toast
+     **********************/
+    let toastTimer = null;
+    function toast(msg, ms=2400){
+      const t = $("#toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => t.classList.remove("show"), ms);
+    }
+
+    /**********************
+     * PeerJS networking layer
+     **********************
+     * Message protocol (tiny and explicit):
+     *
+     * Client -> Host:
+     * - {t:"join", name, v}
+     * - {t:"night", action, targetId|null}
+     * - {t:"vote", targetId|null}
+     * - {t:"ping", ts}
+     *
+     * Host -> Client:
+     * - {t:"joined", roomCode, youId}
+     * - {t:"state", state}                 (public snapshot)
+     * - {t:"private_role", role}           (private info)
+     * - {t:"investigation", targetName, result} (private police result)
+     * - {t:"toast", msg}
+     ********************************************************************/
+    const APP_VERSION = "1.0";
+    let peer = null;
+
+    let isHost = false;
+    let roomCode = null;
+
+    let myId = null;
+    let myName = "";
+    let myRole = null;      // set privately by host
+    let myPoliceMemo = "";  // latest investigation result for police
+
+    // Host-side connection registry: peerId -> DataConnection
+    const conns = new Map();
+
+    // Client-side: DataConnection to host
+    let hostConn = null;
+
+    // Last received public game state (for rendering)
+    let publicState = null;
+
+    // Host-side authoritative state (only exists when isHost)
+    let hostState = null;
+
+    /**********************
+     * Utilities
+     **********************/
+    function randCode4(){
+      // 4-char code, easy to speak aloud.
+      const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // skip confusing I/O/1/0
+      let s = "";
+      for (let i=0;i<4;i++) s += alphabet[Math.floor(Math.random()*alphabet.length)];
+      return s;
+    }
+
+    function sanitizeName(raw){
+      let n = (raw || "").trim();
+      n = n.replace(/\s+/g, " ");
+      if (!n) n = "Player";
+      if (n.length > 18) n = n.slice(0, 18);
+      return n;
+    }
+
+    function nowTime(){
+      const d = new Date();
+      return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    }
+
+    function roleIcon(role){
+      return ({
+        Mafia: "🔫",
+        Dentist: "🦷",
+        Angel: "😇",
+        Police: "👮",
+        Citizen: "🧑"
+      })[role] || "🎭";
+    }
+
+    function roleDesc(role){
+      return ({
+        Mafia: "At night, choose someone to kill.",
+        Dentist: "At night, choose someone to silence (they can’t vote tomorrow).",
+        Angel: "At night, protect someone (prevents the Mafia kill).",
+        Police: "At night, investigate someone (you learn Mafia or Innocent).",
+        Citizen: "No night action. Watch, discuss, vote."
+      })[role] || "—";
+    }
+
+    function clampPhase(phase){
+      if (!phase) return "lobby";
+      return phase;
+    }
+
+    /**********************
+     * Host authoritative state model
+     **********************/
+    function newHostState(hostId, hostName){
+      return {
+        roomCode: hostId,
+        phase: "lobby", // "lobby" | "night" | "day" | "vote" | "ended"
+        day: 0,         // increments when Day starts (after Night resolves)
+        log: [
+          {ts: nowTime(), kind:"muted", text:`Room created. Waiting for players…`}
+        ],
+        players: {
+          // id -> player record
+          [hostId]: {
+            id: hostId,
+            name: hostName,
+            isHost: true,
+            connected: true,
+            alive: true,
+            role: null,
+            silencedForDay: null,
+          }
+        },
+        // Night actions are collected here (per-night)
+        night: {
+          mafia: {},    // mafiaPlayerId -> targetId|null
+          dentist: {},  // dentistPlayerId -> targetId|null
+          angel: {},    // angelPlayerId -> targetId|null
+          police: {},   // policePlayerId -> targetId|null
+          resolved: false,
+          lastResult: null, // {killedId, protected, silencedId}
+        },
+        // Vote actions are collected here (per-day vote)
+        vote: {
+          votes: {}, // voterId -> targetId|null
+          resolved: false,
+          lastResult: null, // {executedId|null, tie:boolean}
+        },
+        winner: null // "Mafia" | "Town"
+      };
+    }
+
+    function hostAddLog(kind, text){
+      hostState.log.push({ts: nowTime(), kind, text});
+      // Keep log from growing forever:
+      if (hostState.log.length > 120) hostState.log.splice(0, hostState.log.length - 120);
+    }
+
+    function isAlive(p){ return p && p.alive; }
+
+    function hostAliveIds(){
+      return Object.values(hostState.players).filter(p => p.alive).map(p => p.id);
+    }
+
+    function hostMafiaAliveIds(){
+      return Object.values(hostState.players).filter(p => p.alive && p.role === "Mafia").map(p => p.id);
+    }
+
+    function hostTownAliveIds(){
+      return Object.values(hostState.players).filter(p => p.alive && p.role !== "Mafia").map(p => p.id);
+    }
+
+    function hostIsSilencedToday(player){
+      return !!(player.silencedForDay && player.silencedForDay === hostState.day);
+    }
+
+    function hostEligibleVoters(){
+      // Alive and not silenced today.
+      return Object.values(hostState.players).filter(p => p.alive && !hostIsSilencedToday(p)).map(p => p.id);
+    }
+
+    function hostComputeWin(){
+      const mafia = hostMafiaAliveIds().length;
+      const town = hostTownAliveIds().length;
+      if (mafia === 0) return "Town";
+      if (mafia >= town) return "Mafia";
+      return null;
+    }
+
+    /**********************
+     * State snapshots
+     * - Host sends a "public" snapshot to all peers (no roles revealed).
+     * - Host separately sends private role + investigation result to police.
+     **********************/
+    function buildPublicSnapshotFor(peerId){
+      const ps = {
+        roomCode: hostState.roomCode,
+        phase: hostState.phase,
+        day: hostState.day,
+        winner: hostState.winner,
+        log: hostState.log.slice(-10), // show last 10 lines
+        players: [],
+        // Vote tallies are public (simple party game; keeping it visible reduces confusion).
+        voteTallies: null,
+        you: { id: peerId }
+      };
+
+      // Players without role info
+      for (const p of Object.values(hostState.players)){
+        ps.players.push({
+          id: p.id,
+          name: p.name,
+          isHost: !!p.isHost,
+          connected: !!p.connected,
+          alive: !!p.alive,
+          silenced: (p.silencedForDay === hostState.day) && p.alive
+        });
+      }
+
+      // Vote tallies (only in vote phase)
+      if (hostState.phase === "vote"){
+        const tallies = {};
+        for (const [voter, target] of Object.entries(hostState.vote.votes)){
+          if (!target) continue;
+          tallies[target] = (tallies[target] || 0) + 1;
+        }
+        ps.voteTallies = {
+          eligible: hostEligibleVoters().length,
+          majority: Math.floor(hostEligibleVoters().length / 2) + 1,
+          tallies
+        };
+      }
+
+      return ps;
+    }
+
+    function hostBroadcastState(){
+      // Host updates own UI from the same public view it sends to others
+      publicState = buildPublicSnapshotFor(hostState.roomCode);
+      renderAll();
+
+      for (const [pid, conn] of conns.entries()){
+        if (conn && conn.open){
+          conn.send({t:"state", state: buildPublicSnapshotFor(pid)});
+        }
+      }
+      // Also refresh lobby start button enabling:
+      updateHostLobbyControls();
+    }
+
+    function hostSendPrivateRole(playerId){
+      const p = hostState.players[playerId];
+      if (!p) return;
+
+      if (playerId === hostState.roomCode){
+        // Host themselves
+        myRole = p.role;
+        $("#roleCard").style.display = "flex";
+        renderRoleCard();
+        return;
+      }
+
+      const conn = conns.get(playerId);
+      if (conn && conn.open){
+        conn.send({t:"private_role", role: p.role});
+      }
+    }
+
+    function hostSendInvestigation(policeId, targetId){
+      const police = hostState.players[policeId];
+      const target = hostState.players[targetId];
+      if (!police || !target || !police.alive) return;
+
+      const result = (target.role === "Mafia") ? "Mafia" : "Innocent";
+
+      if (policeId === hostState.roomCode){
+        myPoliceMemo = `${target.name} is ${result}.`;
+        hostAddLog("muted", `👮 Investigation delivered privately to ${police.name}.`);
+        return;
+      }
+
+      const conn = conns.get(policeId);
+      if (conn && conn.open){
+        conn.send({t:"investigation", targetName: target.name, result});
+      }
+      hostAddLog("muted", `👮 Investigation delivered privately to ${police.name}.`);
+    }
+
+    /**********************
+     * Host: role assignment
+     **********************/
+    function hostAssignRoles(){
+      const ids = Object.keys(hostState.players);
+      const n = ids.length;
+
+      // Decide counts: keep simple & playable on phones.
+      // - 1 Mafia for 4-6 players; 2 Mafia for 7+.
+      const mafiaCount = (n >= 7) ? 2 : 1;
+
+      // Special roles: include if enough players.
+      const wantPolice  = (n >= 4);
+      const wantAngel   = (n >= 5);
+      const wantDentist = (n >= 6);
+
+      // Build role deck
+      const deck = [];
+      for (let i=0;i<mafiaCount;i++) deck.push("Mafia");
+      if (wantPolice) deck.push("Police");
+      if (wantAngel) deck.push("Angel");
+      if (wantDentist) deck.push("Dentist");
+      while (deck.length < n) deck.push("Citizen");
+
+      // Shuffle ids and deck in sync
+      shuffle(ids);
+      shuffle(deck);
+
+      for (let i=0;i<n;i++){
+        const id = ids[i];
+        hostState.players[id].role = deck[i];
+      }
+
+      hostAddLog("ok", "Roles assigned. Night falls.");
+      for (const id of ids) hostSendPrivateRole(id);
+    }
+
+    function shuffle(arr){
+      for (let i=arr.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    /**********************
+     * Host: phase transitions
+     **********************/
+    function hostStartGame(){
+      if (hostState.phase !== "lobby") return;
+
+      const count = Object.keys(hostState.players).length;
+      if (count < 4){
+        hostAddLog("muted", "Need at least 4 players to start.");
+        hostBroadcastState();
+        return;
+      }
+
+      hostAssignRoles();
+      hostState.phase = "night";
+      hostResetNight();
+      hostBroadcastState();
+    }
+
+    function hostResetNight(){
+      hostState.night = {
+        mafia: {},
+        dentist: {},
+        angel: {},
+        police: {},
+        resolved: false,
+        lastResult: null
+      };
+      // Clearing "police memo" each night keeps the UI focused; player still remembers.
+      if (isHost) myPoliceMemo = "";
+    }
+
+    function hostResetVote(){
+      hostState.vote = {
+        votes: {},
+        resolved: false,
+        lastResult: null
+      };
+    }
+
+    function hostBeginDayFromNightResolution(nightResult){
+      // Night ends -> Day begins
+      hostState.day += 1;
+      hostState.phase = "day";
+      hostState.night.lastResult = nightResult;
+
+      // Announce
+      const killed = nightResult.killedId ? hostState.players[nightResult.killedId]?.name : null;
+      const silenced = nightResult.silencedId ? hostState.players[nightResult.silencedId]?.name : null;
+
+      if (nightResult.protected && nightResult.killedId){
+        hostAddLog("ok", `😇 Someone was attacked, but an Angel protected them.`);
+      } else if (killed){
+        hostAddLog("danger", `☠️ ${killed} was found dead at dawn.`);
+      } else {
+        hostAddLog("muted", `Dawn arrives. No one died tonight.`);
+      }
+
+      if (silenced){
+        hostAddLog("muted", `🦷 ${silenced} is silenced today (can’t vote).`);
+      }
+    }
+
+    function hostStartVoting(){
+      if (hostState.phase !== "day") return;
+      hostState.phase = "vote";
+      hostResetVote();
+      hostAddLog("muted", "Voting begins. Choose carefully.");
+      hostBroadcastState();
+    }
+
+    function hostResolveVote(force=false){
+      if (hostState.phase !== "vote") return;
+
+      const eligible = hostEligibleVoters();
+      const majority = Math.floor(eligible.length / 2) + 1;
+
+      // Compute tallies
+      const tally = {};
+      for (const voterId of eligible){
+        const t = hostState.vote.votes[voterId] || null;
+        if (!t) continue;
+        // Ignore votes for dead players (possible if someone died/disconnected mid-vote)
+        if (!hostState.players[t] || !hostState.players[t].alive) continue;
+        tally[t] = (tally[t] || 0) + 1;
+        if (!force && tally[t] >= majority){
+          // Immediate majority reached
+          hostExecutePlayer(t, `🗳️ Majority vote. ${hostState.players[t].name} was executed.`);
+          hostState.vote.resolved = true;
+          hostState.vote.lastResult = {executedId: t, tie: false};
+          hostAfterVoteAdvance();
+          return;
+        }
+      }
+
+      // If forced (Host tapped Resolve) or no majority, pick highest
+      let bestId = null;
+      let bestCount = 0;
+      let tie = false;
+
+      for (const [id, c] of Object.entries(tally)){
+        if (c > bestCount){
+          bestId = id;
+          bestCount = c;
+          tie = false;
+        } else if (c === bestCount && c > 0){
+          tie = true;
+        }
+      }
+
+      if (!bestId || bestCount === 0 || tie){
+        hostAddLog("muted", "No execution today.");
+        hostState.vote.resolved = true;
+        hostState.vote.lastResult = {executedId: null, tie: true};
+        hostAfterVoteAdvance();
+        return;
+      }
+
+      hostExecutePlayer(bestId, `🗳️ ${hostState.players[bestId].name} was executed by vote.`);
+      hostState.vote.resolved = true;
+      hostState.vote.lastResult = {executedId: bestId, tie: false};
+      hostAfterVoteAdvance();
+    }
+
+    function hostAfterVoteAdvance(){
+      // Check win
+      const win = hostComputeWin();
+      if (win){
+        hostState.phase = "ended";
+        hostState.winner = win;
+        hostAddLog(win === "Town" ? "ok" : "danger", `Game over: ${win} wins.`);
+        hostBroadcastState();
+        return;
+      }
+
+      // Otherwise, night begins again (Host must tap "Next Night" or we can auto).
+      hostState.phase = "day"; // brief return; Host uses control to go to next night
+      hostAddLog("muted", "Day ends. Prepare for night.");
+      hostBroadcastState();
+    }
+
+    function hostNextNight(){
+      if (hostState.phase !== "day") return;
+      // Also check win again (in case someone disconnected etc.)
+      const win = hostComputeWin();
+      if (win){
+        hostState.phase = "ended";
+        hostState.winner = win;
+        hostAddLog(win === "Town" ? "ok" : "danger", `Game over: ${win} wins.`);
+        hostBroadcastState();
+        return;
+      }
+      hostState.phase = "night";
+      hostResetNight();
+      hostAddLog("muted", "Night falls. Roles, act in secret.");
+      hostBroadcastState();
+    }
+
+    function hostExecutePlayer(playerId, reasonText){
+      const p = hostState.players[playerId];
+      if (!p || !p.alive) return;
+      p.alive = false;
+      hostAddLog("danger", reasonText);
+    }
+
+    /**********************
+     * Host: collecting actions
+     **********************/
+    function hostHandleNightAction(fromId, action, targetId){
+      if (hostState.phase !== "night") return;
+
+      const actor = hostState.players[fromId];
+      if (!actor || !actor.alive) return;
+
+      // Validate target (allow null for "skip")
+      if (targetId !== null){
+        const target = hostState.players[targetId];
+        if (!target || !target.alive) return;
+      }
+
+      // Enforce ability by role
+      if (action === "mafia_kill" && actor.role === "Mafia"){
+        hostState.night.mafia[fromId] = targetId;
+        hostAddLog("muted", `🔫 Mafia action received (${actor.name}).`);
+      } else if (action === "dentist_silence" && actor.role === "Dentist"){
+        hostState.night.dentist[fromId] = targetId;
+        hostAddLog("muted", `🦷 Dentist action received (${actor.name}).`);
+      } else if (action === "angel_protect" && actor.role === "Angel"){
+        hostState.night.angel[fromId] = targetId;
+        hostAddLog("muted", `😇 Angel action received (${actor.name}).`);
+      } else if (action === "police_investigate" && actor.role === "Police"){
+        hostState.night.police[fromId] = targetId;
+        hostAddLog("muted", `👮 Police action received (${actor.name}).`);
+      } else {
+        return; // ignore invalid action types
+      }
+
+      // If police investigated, deliver result immediately (still night)
+      if (action === "police_investigate" && targetId){
+        hostSendInvestigation(fromId, targetId);
+      }
+
+      hostBroadcastState();
+      hostMaybeResolveNight();
+    }
+
+    function hostMaybeResolveNight(){
+      // Determine who must act:
+      const alive = Object.values(hostState.players).filter(p => p.alive);
+
+      // If no roles assigned (shouldn't happen), don't resolve
+      if (!alive.some(p => p.role)) return;
+
+      // Compute required actors per role
+      const mafia = alive.filter(p => p.role === "Mafia").map(p => p.id);
+      const dentist = alive.filter(p => p.role === "Dentist").map(p => p.id);
+      const angel = alive.filter(p => p.role === "Angel").map(p => p.id);
+      const police = alive.filter(p => p.role === "Police").map(p => p.id);
+
+      const allSubmitted = (ids, bag) => ids.every(id => Object.prototype.hasOwnProperty.call(bag, id));
+
+      // Citizens don't need to submit anything.
+      if (!allSubmitted(mafia, hostState.night.mafia)) return;
+      if (!allSubmitted(dentist, hostState.night.dentist)) return;
+      if (!allSubmitted(angel, hostState.night.angel)) return;
+      if (!allSubmitted(police, hostState.night.police)) return;
+
+      // Resolve once
+      if (hostState.night.resolved) return;
+      hostState.night.resolved = true;
+
+      // 1) Mafia chooses kill target: if multiple mafia, take plurality (ties => no kill)
+      const mafiaTarget = pluralityPick(Object.values(hostState.night.mafia).filter(x => x));
+      // 2) Angel protect: pick first non-null
+      const angelTarget = firstNonNull(Object.values(hostState.night.angel));
+      // 3) Dentist silence: pick first non-null
+      const silenceTarget = firstNonNull(Object.values(hostState.night.dentist));
+
+      // Apply silence to the upcoming day (hostState.day + 1)
+      if (silenceTarget && hostState.players[silenceTarget]){
+        hostState.players[silenceTarget].silencedForDay = hostState.day + 1;
+      }
+
+      // Resolve kill vs protection
+      let killedId = mafiaTarget || null;
+      const protectedHit = !!(killedId && angelTarget && killedId === angelTarget);
+
+      if (protectedHit){
+        // No death
+        killedId = null;
+      } else if (killedId && hostState.players[killedId]){
+        hostState.players[killedId].alive = false;
+      }
+
+      const res = { killedId: (mafiaTarget || null), protected: protectedHit, silencedId: (silenceTarget || null) };
+      hostBeginDayFromNightResolution(res);
+
+      // Check win immediately (in case mafia killed last town etc.)
+      const win = hostComputeWin();
+      if (win){
+        hostState.phase = "ended";
+        hostState.winner = win;
+        hostAddLog(win === "Town" ? "ok" : "danger", `Game over: ${win} wins.`);
+      }
+
+      hostBroadcastState();
+    }
+
+    function pluralityPick(arr){
+      // arr: [id, id, ...]
+      if (!arr.length) return null;
+      const count = {};
+      for (const x of arr) count[x] = (count[x] || 0) + 1;
+
+      let best = null, bestC = 0, tie = false;
+      for (const [id, c] of Object.entries(count)){
+        if (c > bestC){ best = id; bestC = c; tie = false; }
+        else if (c === bestC) tie = true;
+      }
+      return tie ? null : best;
+    }
+    function firstNonNull(arr){
+      for (const x of arr) if (x) return x;
+      return null;
+    }
+
+    function hostHandleVote(fromId, targetId){
+      if (hostState.phase !== "vote") return;
+      const voter = hostState.players[fromId];
+      if (!voter || !voter.alive) return;
+      if (hostIsSilencedToday(voter)) return; // silenced can't vote
+
+      // Validate target (allow null for abstain)
+      if (targetId !== null){
+        const target = hostState.players[targetId];
+        if (!target || !target.alive) return;
+      }
+
+      hostState.vote.votes[fromId] = targetId;
+      hostAddLog("muted", `🗳️ Vote received (${voter.name}).`);
+      hostBroadcastState();
+
+      // Auto-resolve if majority reached
+      hostResolveVote(false);
+    }
+
+    /**********************
+     * Host: connection handling
+     **********************/
+    function hostOnIncomingConnection(conn){
+      // conn.peer is the remote peer's ID (assigned by PeerServer cloud, unless they picked one).
+      conn.on("open", () => {
+        conns.set(conn.peer, conn);
+        // Note: We wait for a "join" message to know their name.
+      });
+
+      conn.on("data", (msg) => {
+        if (!msg || typeof msg !== "object") return;
+
+        if (msg.t === "join"){
+          const name = sanitizeName(msg.name);
+          // Add or re-add
+          hostState.players[conn.peer] = hostState.players[conn.peer] || {
+            id: conn.peer,
+            name,
+            isHost: false,
+            connected: true,
+            alive: true,
+            role: null,
+            silencedForDay: null,
+          };
+          hostState.players[conn.peer].name = name;
+          hostState.players[conn.peer].connected = true;
+
+          // If game already started and they reconnected late: mark them dead to avoid breaks.
+          // (You can improve this to support reconnection, but it’s tricky without persistent identity.)
+          if (hostState.phase !== "lobby" && hostState.players[conn.peer].role === null){
+            hostState.players[conn.peer].alive = false;
+          }
+
+          // Welcome
+          conn.send({t:"joined", roomCode: hostState.roomCode, youId: conn.peer});
+          hostAddLog("ok", `${name} joined.`);
+          hostBroadcastState();
+
+          // If game already started AND this player has a role, send it privately
+          if (hostState.phase !== "lobby" && hostState.players[conn.peer].role){
+            hostSendPrivateRole(conn.peer);
+          }
+        }
+
+        if (msg.t === "night"){
+          hostHandleNightAction(conn.peer, msg.action, (msg.targetId ?? null));
+        }
+
+        if (msg.t === "vote"){
+          hostHandleVote(conn.peer, (msg.targetId ?? null));
+        }
+
+        if (msg.t === "ping"){
+          // Optional: could respond with pong. Not required for gameplay.
+        }
+      });
+
+      conn.on("close", () => {
+        // Mark as disconnected; if in-game and alive, keep them alive (table game),
+        // but they can no longer submit actions. For simplicity: treat as dead to keep flow.
+        const p = hostState.players[conn.peer];
+        if (p){
+          p.connected = false;
+          if (hostState.phase !== "lobby" && p.alive){
+            p.alive = false;
+            hostAddLog("danger", `⚡ ${p.name} disconnected and is out.`);
+          } else {
+            hostAddLog("muted", `${p.name} left.`);
+          }
+        }
+        conns.delete(conn.peer);
+        hostBroadcastState();
+      });
+
+      conn.on("error", () => {
+        // PeerJS treats many errors as fatal; UI can still proceed with remaining peers.
+      });
+    }
+
+    /**********************
+     * Client: connection handling
+     **********************/
+    function clientConnectToHost(code){
+      return new Promise((resolve, reject) => {
+        hostConn = peer.connect(code, {
+          reliable: true,          // small, critical messages (votes/actions)
+          serialization: "json",   // makes debugging easier
+          metadata: { v: APP_VERSION }
+        });
+
+        hostConn.on("open", () => {
+          $("#netStatus").textContent = "Connected";
+          hostConn.send({t:"join", name: myName, v: APP_VERSION});
+          resolve();
+        });
+
+        hostConn.on("data", (msg) => {
+          if (!msg || typeof msg !== "object") return;
+
+          if (msg.t === "joined"){
+            roomCode = msg.roomCode;
+            $("#roomCode").textContent = roomCode;
+          }
+
+          if (msg.t === "state"){
+            publicState = msg.state;
+            renderAll();
+          }
+
+          if (msg.t === "private_role"){
+            myRole = msg.role;
+            $("#roleCard").style.display = "flex";
+            renderRoleCard();
+            toast(`Your role: ${myRole} ${roleIcon(myRole)}`);
+          }
+
+          if (msg.t === "investigation"){
+            myPoliceMemo = `${msg.targetName} is ${msg.result}.`;
+            toast("Investigation result received (private).");
+            renderAll();
+          }
+
+          if (msg.t === "toast"){
+            toast(msg.msg);
+          }
+        });
+
+        hostConn.on("close", () => {
+          $("#netStatus").textContent = "Disconnected";
+          toast("Connection to Host closed.");
+          // Return to home for simplicity
+          cleanupAll();
+          showView("home");
+          setTheme(manualTheme);
+        });
+
+        hostConn.on("error", (e) => {
+          reject(e);
+        });
+      });
+    }
+
+    /**********************
+     * Creating peers (Host / Client)
+     *
+     * PeerJS uses PeerServer (cloud by default) for signaling and metadata.
+     * After peers connect, data flows P2P via WebRTC DataChannels.
+     **********************/
+    function createPeerWithId(idOrNull){
+      return new Promise((resolve, reject) => {
+        try{
+          peer = idOrNull ? new Peer(idOrNull) : new Peer();
+        }catch(e){
+          reject(e);
+          return;
+        }
+
+        peer.on("open", (id) => {
+          myId = id;
+          resolve(id);
+        });
+
+        peer.on("connection", (conn) => {
+          // Only Host should accept inbound connections
+          if (isHost) hostOnIncomingConnection(conn);
+          else conn.close();
+        });
+
+        peer.on("disconnected", () => {
+          // Peer disconnected from signaling server; existing P2P connections may still live.
+          $("#netStatus").textContent = "Peer disconnected";
+        });
+
+        peer.on("close", () => {
+          $("#netStatus").textContent = "Peer closed";
+        });
+
+        peer.on("error", (err) => {
+          // For host: handle unavailable ID and retry.
+          reject(err);
+        });
+      });
+    }
+
+    /**********************
+     * UI rendering
+     **********************/
+    function renderAll(){
+      // Decide which view to show based on state
+      if (!publicState){
+        // Home/Lobby before any state
+        return;
+      }
+
+      const phase = clampPhase(publicState.phase);
+      applyPhaseTheme(phase);
+
+      if (phase === "lobby"){
+        showView("lobby");
+        renderLobby();
+      } else {
+        showView("game");
+        renderGame();
+      }
+    }
+
+    function renderLobby(){
+      $("#roomCode").textContent = roomCode || "----";
+      $("#netStatus").textContent = isHost ? "Hosting" : "Connected";
+
+      const wrap = $("#lobbyPlayers");
+      wrap.innerHTML = "";
+
+      const players = (publicState?.players || []).slice().sort((a,b) => (b.isHost - a.isHost) || a.name.localeCompare(b.name));
+      for (const p of players){
+        const badges = el("div", {class:"badges"}, []);
+        if (p.isHost) badges.appendChild(el("span", {class:"badge host", text:"Host"}));
+        badges.appendChild(el("span", {class:"badge " + (p.alive ? "alive":"dead"), text: p.alive ? "Alive" : "Dead"}));
+        if (p.id === myId) badges.appendChild(el("span", {class:"badge me", text:"You"}));
+        if (!p.connected) badges.appendChild(el("span", {class:"badge", text:"Offline"}));
+
+        wrap.appendChild(el("div", {class:"item"}, [
+          el("div", {class:"who"}, [
+            el("div", {class:"name", text: p.name}),
+            el("div", {class:"meta", text: p.id === myId ? "This is you" : (p.isHost ? "Host device" : "Guest")}),
+          ]),
+          badges
+        ]));
+      }
+
+      $("#lobbyHint").textContent = isHost
+        ? "Start when everyone has joined. Minimum 4 players recommended."
+        : "Wait for the Host to start the game.";
+
+      updateHostLobbyControls();
+    }
+
+    function updateHostLobbyControls(){
+      if (!isHost){
+        $("#btnStartGame").style.display = "none";
+        return;
+      }
+      $("#btnStartGame").style.display = "inline-flex";
+      const count = Object.keys(hostState.players).length;
+      $("#btnStartGame").disabled = !(hostState.phase === "lobby" && count >= 4);
+    }
+
+    function renderRoleCard(){
+      const role = myRole || "—";
+      $("#roleIcon").textContent = roleIcon(role);
+      $("#roleName").textContent = role;
+      $("#roleDesc").textContent = roleDesc(role);
+
+      const me = publicState?.players?.find(p => p.id === myId);
+      const alive = me?.alive;
+      $("#badgeAlive").textContent = alive ? "Alive" : "Dead";
+      $("#badgeAlive").className = "badge " + (alive ? "alive" : "dead");
+    }
+
+    function renderNarrator(){
+      const box = $("#narrator");
+      box.innerHTML = "";
+
+      const lines = (publicState?.log || []);
+      if (!lines.length){
+        box.appendChild(el("div", {class:"line muted", text:"—"}));
+        return;
+      }
+
+      for (const ln of lines){
+        const cls = "line " + (ln.kind || "muted");
+        box.appendChild(el("div", {class: cls, text: `[${ln.ts}] ${ln.text}`}));
+      }
+    }
+
+    function renderPlayersListGame(){
+      const wrap = $("#gamePlayers");
+      wrap.innerHTML = "";
+      const players = (publicState?.players || []).slice().sort((a,b) => (b.alive - a.alive) || (b.isHost - a.isHost) || a.name.localeCompare(b.name));
+
+      // Build a quick lookup for tallies (during vote)
+      const tallies = publicState?.voteTallies?.tallies || {};
+      const phase = publicState?.phase;
+
+      for (const p of players){
+        const badges = el("div", {class:"badges"}, []);
+        if (p.isHost) badges.appendChild(el("span", {class:"badge host", text:"Host"}));
+        if (p.id === myId) badges.appendChild(el("span", {class:"badge me", text:"You"}));
+        badges.appendChild(el("span", {class:"badge " + (p.alive ? "alive":"dead"), text: p.alive ? "Alive" : "Dead"}));
+        if (p.silenced) badges.appendChild(el("span", {class:"badge silenced", text:"Silenced"}));
+        if (!p.connected) badges.appendChild(el("span", {class:"badge", text:"Offline"}));
+        if (phase === "vote" && p.alive){
+          const c = tallies[p.id] || 0;
+          badges.appendChild(el("span", {class:"badge", text:`Votes: ${c}`}));
+        }
+
+        wrap.appendChild(el("div", {class:"item"}, [
+          el("div", {class:"who"}, [
+            el("div", {class:"name", text: p.name}),
+            el("div", {class:"meta", text: p.id === myId ? "You" : (p.isHost ? "Host" : "Player")}),
+          ]),
+          badges
+        ]));
+      }
+    }
+
+    function renderGame(){
+      const phase = clampPhase(publicState?.phase);
+      const day = publicState?.day || 0;
+
+      $("#phaseTitle").textContent =
+        phase === "night" ? `Night ${day+1}` :
+        phase === "day"   ? `Day ${day}` :
+        phase === "vote"  ? `Vote (Day ${day})` :
+        phase === "ended" ? `Game Over` :
+        "—";
+
+      $("#phaseSub").textContent =
+        phase === "night" ? "Roles act in secret." :
+        phase === "day"   ? "Discuss what happened." :
+        phase === "vote"  ? "Majority vote executes a suspect." :
+        phase === "ended" ? (publicState?.winner ? `${publicState.winner} wins.` : "—") :
+        "—";
+
+      $("#roleCard").style.display = myRole ? "flex" : "none";
+      if (myRole) renderRoleCard();
+
+      renderNarrator();
+      renderActionArea();
+      renderPlayersListGame();
+
+      // Host controls visible only on Host and only during game
+      $("#hostControls").style.display = isHost ? "flex" : "none";
+      if (isHost){
+        // Enable/disable based on phase
+        $("#btnHostToVote").disabled = (hostState.phase !== "day");
+        $("#btnHostResolveVote").disabled = (hostState.phase !== "vote");
+        $("#btnHostNextNight").disabled = (hostState.phase !== "day");
+      }
+
+      // Helpful hint area
+      const me = publicState?.players?.find(p => p.id === myId);
+      const silenced = !!me?.silenced;
+      if (phase === "vote" && silenced){
+        $("#gameHint").textContent = "You are silenced today: you cannot vote.";
+      } else if (phase === "night" && myRole === "Citizen" && me?.alive){
+        $("#gameHint").textContent = "You have no night action. Watch for patterns, then vote by day.";
+      } else if (phase === "ended"){
+        $("#gameHint").textContent = "Tap Leave to return home and host/join a new room.";
+      } else {
+        $("#gameHint").textContent = "";
+      }
+    }
+
+    function renderActionArea(){
+      const area = $("#actionArea");
+      area.innerHTML = "";
+
+      const phase = clampPhase(publicState?.phase);
+      const players = (publicState?.players || []);
+      const me = players.find(p => p.id === myId);
+      const alive = !!me?.alive;
+
+      // If dead, no actions.
+      if (!alive){
+        area.appendChild(el("div", {class:"hint", text:"You are dead. You can still watch the game state."}));
+        // Still show host controls if host.
+        if (isHost && hostState.phase === "ended"){
+          // nothing extra
+        }
+        return;
+      }
+
+      // Show private police memo (if any)
+      if (myPoliceMemo){
+        area.appendChild(el("div", {class:"chip"}, [
+          el("span", {text:"👮"}),
+          el("span", {text: myPoliceMemo})
+        ]));
+      }
+
+      if (phase === "night"){
+        // Night actions by role
+        const role = myRole || "Citizen";
+
+        if (role === "Citizen"){
+          area.appendChild(el("div", {class:"hint", text:"Night: Citizens sleep. (No action)"}));
+          return;
+        }
+
+        const actionMap = {
+          Mafia:   {action:"mafia_kill", title:"Choose a target to kill", note:"Only the Mafia kills at night."},
+          Dentist:{action:"dentist_silence", title:"Choose a target to silence", note:"Silenced players can’t vote tomorrow."},
+          Angel:  {action:"angel_protect", title:"Choose someone to protect", note:"Protection prevents the Mafia kill."},
+          Police: {action:"police_investigate", title:"Choose someone to investigate", note:"You’ll learn Mafia or Innocent (private)."},
+        };
+
+        const spec = actionMap[role];
+        if (!spec){
+          area.appendChild(el("div", {class:"hint", text:"No night action available."}));
+          return;
+        }
+
+        area.appendChild(el("div", {class:"chip"}, [
+          el("span", {text: roleIcon(role)}),
+          el("span", {text: spec.title})
+        ]));
+        area.appendChild(el("div", {class:"hint", text: spec.note}));
+
+        // Target buttons: all alive players except self for most actions (self-target allowed only for Angel)
+        const grid = el("div", {class:"grid"}, []);
+
+        const canTargetSelf = (role === "Angel");
+        for (const p of players){
+          if (!p.alive) continue;
+          if (!canTargetSelf && p.id === myId) continue;
+
+          const btn = el("button", {
+            class:"btn",
+            onclick: () => submitNight(spec.action, p.id)
+          }, []);
+          btn.textContent = `${p.name}`;
+          grid.appendChild(btn);
+        }
+
+        // Skip button
+        const skip = el("button", {class:"btn ghost", onclick: () => submitNight(spec.action, null)}, []);
+        skip.textContent = "Skip";
+
+        area.appendChild(el("div", {class:"targets"}, [
+          el("div", {class:"grid"}, [grid]),
+          el("div", {class:"row"}, [skip])
+        ]));
+
+        return;
+      }
+
+      if (phase === "day"){
+        area.appendChild(el("div", {class:"hint", text:"Day: Discuss in person, then the Host starts voting."}));
+        return;
+      }
+
+      if (phase === "vote"){
+        // Voting UI
+        const silenced = !!me?.silenced;
+        if (silenced){
+          area.appendChild(el("div", {class:"chip"}, [
+            el("span", {text:"🦷"}),
+            el("span", {text:"You are silenced today. Voting disabled."})
+          ]));
+          return;
+        }
+
+        const vt = publicState?.voteTallies;
+        if (vt){
+          area.appendChild(el("div", {class:"chip"}, [
+            el("span", {text:"🗳️"}),
+            el("span", {text:`Majority: ${vt.majority} of ${vt.eligible}`})
+          ]));
+        }
+
+        area.appendChild(el("div", {class:"hint", text:"Vote to execute a suspect. Majority executes immediately."}));
+
+        const grid = el("div", {class:"grid"}, []);
+        for (const p of players){
+          if (!p.alive) continue;
+          const btn = el("button", {
+            class:"btn",
+            onclick: () => submitVote(p.id)
+          });
+          btn.textContent = `${p.name}`;
+          grid.appendChild(btn);
+        }
+        const abstain = el("button", {class:"btn ghost", onclick: () => submitVote(null)});
+        abstain.textContent = "Abstain";
+
+        area.appendChild(el("div", {class:"targets"}, [
+          el("div", {class:"grid"}, [grid]),
+          el("div", {class:"row"}, [abstain])
+        ]));
+        return;
+      }
+
+      if (phase === "ended"){
+        area.appendChild(el("div", {class:"hint", text:"Game over."}));
+      }
+    }
+
+    /**********************
+     * Submit actions (client or host-local)
+     **********************/
+    function submitNight(action, targetId){
+      if (!publicState || publicState.phase !== "night") return;
+
+      // Host can act locally; clients send to host.
+      if (isHost){
+        hostHandleNightAction(myId, action, targetId);
+        toast("Night action submitted.");
+      } else {
+        if (hostConn && hostConn.open){
+          hostConn.send({t:"night", action, targetId});
+          toast("Night action sent.");
+        }
+      }
+    }
+
+    function submitVote(targetId){
+      if (!publicState || publicState.phase !== "vote") return;
+
+      if (isHost){
+        hostHandleVote(myId, targetId);
+        toast("Vote submitted.");
+      } else {
+        if (hostConn && hostConn.open){
+          hostConn.send({t:"vote", targetId});
+          toast("Vote sent.");
+        }
+      }
+    }
+
+    /**********************
+     * Buttons: Home
+     **********************/
+    $("#btnHost").addEventListener("click", async () => {
+      const n = sanitizeName($("#inpName").value);
+      myName = n;
+
+      $("#netStatus").textContent = "Creating…";
+      toast("Creating room…");
+
+      isHost = true;
+      myRole = null;
+      myPoliceMemo = "";
+
+      // Try a few codes to avoid collision ("unavailable-id")
+      for (let attempt=0; attempt<12; attempt++){
+        const code = randCode4();
+        try{
+          await createPeerWithId(code);
+          roomCode = code;
+          break;
+        }catch(err){
+          // If ID taken, retry; otherwise show error
+          if (err && err.type === "unavailable-id"){
+            try{ peer && peer.destroy(); }catch(_){}
+            peer = null;
+            continue;
+          }
+          toast("Peer error: " + (err?.type || err?.message || "unknown"));
+          isHost = false;
+          return;
+        }
+      }
+
+      if (!roomCode){
+        toast("Could not find an available room code. Try again.");
+        isHost = false;
+        return;
+      }
+
+      // Initialize host state
+      hostState = newHostState(roomCode, myName);
+      publicState = buildPublicSnapshotFor(roomCode);
+
+      $("#roomCode").textContent = roomCode;
+      $("#netStatus").textContent = "Hosting";
+      showView("lobby");
+      renderLobby();
+      toast("Room created: " + roomCode);
+    });
+
+    $("#btnJoin").addEventListener("click", async () => {
+      myName = sanitizeName($("#inpJoinName").value);
+      const code = ($("#inpRoom").value || "").trim().toUpperCase().slice(0,4);
+
+      if (code.length !== 4){
+        toast("Enter a 4-character room code.");
+        return;
+      }
+
+      isHost = false;
+      roomCode = code;
+      myRole = null;
+      myPoliceMemo = "";
+      publicState = { phase: "lobby", players: [] }; // temporary to render lobby
+
+      $("#roomCode").textContent = code;
+      $("#netStatus").textContent = "Connecting…";
+      showView("lobby");
+      renderLobby();
+
+      try{
+        await createPeerWithId(null); // random id from signaling server
+      }catch(err){
+        toast("Peer error: " + (err?.type || err?.message || "unknown"));
+        cleanupAll();
+        showView("home");
+        setTheme(manualTheme);
+        return;
+      }
+
+      try{
+        await clientConnectToHost(code);
+        toast("Joined room " + code);
+      }catch(err){
+        toast("Could not connect to Host. Check code and try again.");
+        cleanupAll();
+        showView("home");
+        setTheme(manualTheme);
+      }
+    });
+
+    /**********************
+     * Buttons: Lobby / Game
+     **********************/
+    $("#btnCopyCode").addEventListener("click", async () => {
+      if (!roomCode) return;
+      try{
+        await navigator.clipboard.writeText(roomCode);
+        toast("Room code copied.");
+      }catch(_){
+        toast("Copy failed (clipboard blocked). Manually share: " + roomCode);
+      }
+    });
+
+    $("#btnLeaveLobby").addEventListener("click", () => {
+      cleanupAll();
+      showView("home");
+      setTheme(manualTheme);
+    });
+
+    $("#btnLeaveGame").addEventListener("click", () => {
+      cleanupAll();
+      showView("home");
+      setTheme(manualTheme);
+    });
+
+    $("#btnStartGame").addEventListener("click", () => {
+      if (!isHost) return;
+      hostStartGame();
+    });
+
+    // Host controls during game
+    $("#btnHostToVote").addEventListener("click", () => {
+      if (!isHost) return;
+      hostStartVoting();
+    });
+    $("#btnHostResolveVote").addEventListener("click", () => {
+      if (!isHost) return;
+      hostResolveVote(true); // force
+    });
+    $("#btnHostNextNight").addEventListener("click", () => {
+      if (!isHost) return;
+      hostNextNight();
+    });
+
+    /**********************
+     * Cleanup (leave room)
+     **********************/
+    function cleanupAll(){
+      // Close connections
+      try{
+        if (hostConn) hostConn.close();
+      }catch(_){}
+      hostConn = null;
+
+      try{
+        for (const [,c] of conns.entries()){
+          try{ c.close(); }catch(_){}
+        }
+      }catch(_){}
+      conns.clear();
+
+      // Destroy peer
+      try{
+        if (peer && !peer.destroyed) peer.destroy();
+      }catch(_){}
+      peer = null;
+
+      // Reset state
+      isHost = false;
+      roomCode = null;
+      myId = null;
+      myRole = null;
+      myPoliceMemo = "";
+      publicState = null;
+      hostState = null;
+
+      $("#netStatus").textContent = "Idle";
+      $("#roomCode").textContent = "----";
+      $("#roleCard").style.display = "none";
+      $("#narrator").innerHTML = "";
+      $("#lobbyPlayers").innerHTML = "";
+      $("#gamePlayers").innerHTML = "";
+      $("#actionArea").innerHTML = "";
+      $("#hostControls").style.display = "none";
+    }
+
+    /**********************
+     * Initial UI state
+     **********************/
+    setTheme("dark");
+  </script>
+</body>
+</html>
