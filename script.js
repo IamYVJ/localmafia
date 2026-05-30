@@ -54,6 +54,15 @@ function showView(name) {
   for (const [k, node] of Object.entries(views)) {
     node.classList.toggle("active", k === name);
   }
+  if (name === "home") resetHomePanels();
+}
+
+/** Home landing: collapse the host/join forms back to the two CTAs. */
+function resetHomePanels() {
+  const choose = $("#ctaChoose"), host = $("#panelHost"), join = $("#panelJoin");
+  if (choose) choose.hidden = false;
+  if (host)   host.hidden   = true;
+  if (join)   join.hidden   = true;
 }
 
 /* ═══════════════════════════════════════════
@@ -1057,6 +1066,25 @@ function submitVote(targetId) {
 /* ═══════════════════════════════════════════
    Button handlers: Home
    ═══════════════════════════════════════════ */
+
+/* Progressive disclosure: reveal the relevant form, hide the CTAs. */
+$("#btnShowHost").addEventListener("click", () => {
+  $("#ctaChoose").hidden = true;
+  $("#panelHost").hidden = false;
+  $("#inpName").focus();
+});
+$("#btnShowJoin").addEventListener("click", () => {
+  $("#ctaChoose").hidden = true;
+  $("#panelJoin").hidden = false;
+  $("#inpJoinName").focus();
+});
+document.querySelectorAll("[data-back]").forEach(b => b.addEventListener("click", resetHomePanels));
+
+/* Enter submits from the relevant input. */
+$("#inpName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#btnHost").click(); });
+$("#inpRoom").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#btnJoin").click(); });
+$("#inpJoinName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#inpRoom").focus(); });
+
 $("#btnHost").addEventListener("click", async () => {
   myName = sanitizeName($("#inpName").value);
   isHost = true;

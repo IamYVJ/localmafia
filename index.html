@@ -8,6 +8,11 @@
   <!-- PeerJS (WebRTC signaling + data channels) -->
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
 
+  <!-- Typefaces: Inter (body), Instrument Serif (display), JetBrains Mono (labels) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
   <!-- App styles -->
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -16,11 +21,11 @@
   <div class="app">
     <header>
       <div class="brand">
-        <div class="title">Local Mafia</div>
-        <div class="subtitle">Serverless, local multiplayer • Peer-to-peer</div>
+        <span class="logo-dot"></span>
+        <div class="title">LOCAL MAFIA</div>
       </div>
       <div class="top-actions">
-        <button id="btnTheme" class="btn small primary" title="Toggle Day/Night theme">
+        <button id="btnTheme" class="btn small ghost mono" title="Toggle Day/Night theme">
           <span id="themeIcon">🌙</span>
           <span id="themeLabel">Night</span>
         </button>
@@ -31,46 +36,45 @@
 
       <!-- ═══════════ HOME ═══════════ -->
       <section id="viewHome" class="view active">
-        <div class="split">
-          <div class="card">
-            <h2>Host a game</h2>
-            <div class="field">
-              <label for="inpName">Your name</label>
-              <input id="inpName" maxlength="18" placeholder="e.g., Aditi" />
-            </div>
-            <div class="row">
-              <button id="btnHost" class="btn primary">Host Game</button>
-            </div>
-            <p class="hint">
-              You'll get a 4‑character room code. Keep this tab open — Host is the "server".
-            </p>
+        <div class="hero-wrap">
+          <div class="badge-pill">
+            <span class="badge-new">LIVE</span>
+            SERVERLESS · PEER-TO-PEER · LOCAL WI-FI
           </div>
 
-          <div class="card">
-            <h2>Join a game</h2>
-            <div class="field">
-              <label for="inpJoinName">Your name</label>
-              <input id="inpJoinName" maxlength="18" placeholder="e.g., Rohan" />
-            </div>
-            <div class="field">
-              <label for="inpRoom">Room code (4 chars)</label>
-              <input id="inpRoom" maxlength="4" placeholder="ABCD" autocapitalize="characters" />
-            </div>
-            <div class="row">
-              <button id="btnJoin" class="btn primary">Join Game</button>
-            </div>
-            <p class="hint">
-              Tip: Everyone should be on the same Wi‑Fi for easiest connectivity.
-            </p>
-          </div>
-        </div>
+          <h1 class="display">Someone at the table<br /><span class="display-em">is lying.</span></h1>
 
-        <div class="card">
-          <h2>How it works</h2>
-          <p class="hint">
-            One Host manages the authoritative game state and broadcasts updates.
-            Everyone else sends actions (night abilities, votes) to the Host.
+          <p class="lede">
+            <b>Local Mafia</b> is a social-deduction party game that runs entirely
+            between phones on your Wi-Fi — <span class="hl">no app, no accounts</span>,
+            nothing to install. One device hosts; everyone else joins with a code.
           </p>
+
+          <p class="kicker"><span class="hl">Free &amp; local.</span> Up to 10 players. Nothing to install.</p>
+
+          <div class="cta-row" id="ctaChoose">
+            <button id="btnShowHost" class="btn mono primary" type="button">&gt; Host a game</button>
+            <button id="btnShowJoin" class="btn mono" type="button">▷ Join a room</button>
+          </div>
+
+          <div class="panel" id="panelHost" hidden>
+            <input id="inpName" maxlength="18" placeholder="Your name" aria-label="Your name" />
+            <div class="panel-row">
+              <button class="btn mono back" data-back type="button">← Back</button>
+              <button id="btnHost" class="btn mono primary">Create room →</button>
+            </div>
+          </div>
+
+          <div class="panel" id="panelJoin" hidden>
+            <input id="inpJoinName" maxlength="18" placeholder="Your name" aria-label="Your name" />
+            <input id="inpRoom" maxlength="4" placeholder="Room code" aria-label="Room code" autocapitalize="characters" />
+            <div class="panel-row">
+              <button class="btn mono back" data-back type="button">← Back</button>
+              <button id="btnJoin" class="btn mono primary">Join →</button>
+            </div>
+          </div>
+
+          <p class="fineprint">No accounts · No server · Same Wi-Fi</p>
         </div>
       </section>
 
