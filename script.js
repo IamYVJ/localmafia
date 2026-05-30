@@ -70,7 +70,13 @@ function setTheme(theme) {
   $("#themeLabel").textContent = isLight ? "Day"  : "Night";
 }
 
+let themePhase = null;
+
 function applyPhaseTheme(phase) {
+  // Only auto-drive the theme when the phase actually changes, so a manual
+  // toggle made mid-phase isn't immediately undone by the next state render.
+  if (phase === themePhase) return;
+  themePhase = phase;
   if (phase === "night") setTheme("dark");
   else if (["day", "vote", "ended"].includes(phase)) setTheme("light");
   else setTheme(manualTheme);
@@ -108,6 +114,7 @@ let myId       = null;   // this device's PeerJS ID
 let myName     = "";
 let myRole     = null;   // delivered privately by Host
 let myPoliceMemo = "";   // latest private investigation result
+let myMafiaTeam  = [];   // names of fellow Mafia (Mafia only)
 
 /** Host-only: map peerId → DataConnection */
 const conns = new Map();
@@ -125,10 +132,12 @@ let hostState = null;
    Utilities
    ═══════════════════════════════════════════ */
 
-/** 4-char room code, avoiding confusable chars */
+/** Room-code alphabet — confusable chars (O/I/0/1) intentionally excluded */
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/** 4-char room code */
 function randCode4() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({length: 4}, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+  return Array.from({length: 4}, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join("");
 }
 
 function sanitizeName(raw) {
@@ -334,6 +343,27 @@ function hostAssignRoles() {
 
   hostAddLog("ok", "Roles assigned. Night falls.");
   for (const id of ids) hostSendPrivateRole(id);
+  hostSendMafiaTeams();
+}
+
+/* Tell each Mafia who their fellow Mafia are (if any). */
+function hostSendMafiaTeams() {
+  const mafiaIds = Object.values(hostState.players)
+    .filter(p => p.role === "Mafia")
+    .map(p => p.id);
+
+  for (const id of mafiaIds) {
+    const names = mafiaIds
+      .filter(other => other !== id)
+      .map(other => hostState.players[other].name);
+
+    if (id === hostState.roomCode) {
+      myMafiaTeam = names;
+      continue;
+    }
+    const conn = conns.get(id);
+    if (conn && conn.open) conn.send({t: "mafia_team", names});
+  }
 }
 
 function shuffle(arr) {
@@ -374,7 +404,6 @@ function hostNextNight() {
   if (win) { return hostEndGame(win); }
   hostState.phase = "night";
   hostState.night = buildEmptyNight();
-  if (isHost) myPoliceMemo = "";
   hostAddLog("muted", "Night falls. Roles, act in secret.");
   hostBroadcastState();
 }
@@ -416,6 +445,9 @@ function hostResolveVote(force = false) {
       return;
     }
   }
+
+  // Auto-resolve pass only checks for a majority; if none yet, keep collecting.
+  if (!force) { hostBroadcastState(); return; }
 
   // Forced resolution — pick highest, handle ties
   let bestId = null, bestCount = 0, tie = false;
@@ -473,18 +505,24 @@ function hostHandleNightAction(fromId, action, targetId) {
   hostMaybeResolveNight();
 }
 
-function hostMaybeResolveNight() {
+function hostMaybeResolveNight(force = false) {
+  if (hostState.phase !== "night") return;
+  if (hostState.night.resolved) return;
+
   const alive = Object.values(hostState.players).filter(p => p.alive);
   if (!alive.some(p => p.role)) return;
 
-  const byRole = (role) => alive.filter(p => p.role === role).map(p => p.id);
-  const allIn  = (ids, bag) => ids.every(id => Object.hasOwn(bag, id));
+  if (!force) {
+    const byRole = (role) => alive.filter(p => p.role === role).map(p => p.id);
+    const allIn  = (ids, bag) => ids.every(id => Object.hasOwn(bag, id));
 
-  if (!allIn(byRole("Mafia"),   hostState.night.mafia))   return;
-  if (!allIn(byRole("Dentist"), hostState.night.dentist)) return;
-  if (!allIn(byRole("Angel"),   hostState.night.angel))   return;
-  if (!allIn(byRole("Police"),  hostState.night.police))  return;
-  if (hostState.night.resolved) return;
+    if (!allIn(byRole("Mafia"),   hostState.night.mafia))   return;
+    if (!allIn(byRole("Dentist"), hostState.night.dentist)) return;
+    if (!allIn(byRole("Angel"),   hostState.night.angel))   return;
+    if (!allIn(byRole("Police"),  hostState.night.police))  return;
+  } else {
+    hostAddLog("muted", "Host resolved the night early.");
+  }
 
   hostState.night.resolved = true;
 
@@ -527,6 +565,7 @@ function hostHandleVote(fromId, targetId) {
   if (hostState.phase !== "vote") return;
   const voter = hostState.players[fromId];
   if (!voter || !voter.alive || hostIsSilencedToday(voter)) return;
+  if (targetId === fromId) return; // can't vote for yourself
   if (targetId !== null && !hostState.players[targetId]?.alive) return;
 
   hostState.vote.votes[fromId] = targetId;
@@ -574,8 +613,9 @@ function hostOnIncomingConnection(conn) {
         silencedForDay: existing?.silencedForDay ?? null,
       };
 
-      // Late joiner after game started → mark dead to avoid state breaks
-      if (hostState.phase !== "lobby" && !hostState.players[conn.peer].role) {
+      // Late joiner after game started → spectator (no role, not alive)
+      const isLateJoiner = hostState.phase !== "lobby" && !hostState.players[conn.peer].role;
+      if (isLateJoiner) {
         hostState.players[conn.peer].alive = false;
       }
 
@@ -583,9 +623,14 @@ function hostOnIncomingConnection(conn) {
       hostAddLog("ok", `${name} joined.`);
       hostBroadcastState();
 
-      // Resend role if rejoining mid-game
+      if (isLateJoiner) {
+        conn.send({t: "toast", msg: "Game already in progress — you joined as a spectator."});
+      }
+
+      // Resend private info if rejoining mid-game
       if (hostState.phase !== "lobby" && hostState.players[conn.peer].role) {
         hostSendPrivateRole(conn.peer);
+        if (hostState.players[conn.peer].role === "Mafia") hostSendMafiaTeams();
       }
     }
 
@@ -645,6 +690,10 @@ function clientConnectToHost(code) {
         renderRoleCard();
         toast(`Your role: ${myRole} ${roleIcon(myRole)}`);
       }
+      if (msg.t === "mafia_team") {
+        myMafiaTeam = Array.isArray(msg.names) ? msg.names : [];
+        renderAll();
+      }
       if (msg.t === "investigation") {
         myPoliceMemo = `${msg.targetName} is ${msg.result}.`;
         toast("Investigation result received (private).");
@@ -695,9 +744,16 @@ function createPeerWithId(idOrNull) {
 /* ═══════════════════════════════════════════
    Rendering
    ═══════════════════════════════════════════ */
+let lastRenderedPhase = null;
+
 function renderAll() {
   if (!publicState) return;
   const phase = clampPhase(publicState.phase);
+
+  // A fresh night wipes any stale private investigation result.
+  if (phase === "night" && lastRenderedPhase !== "night") myPoliceMemo = "";
+  lastRenderedPhase = phase;
+
   applyPhaseTheme(phase);
 
   if (phase === "lobby") {
@@ -831,6 +887,7 @@ function renderGame() {
 
   $("#hostControls").style.display = isHost ? "flex" : "none";
   if (isHost) {
+    $("#btnHostResolveNight").disabled = hostState.phase !== "night";
     $("#btnHostToVote").disabled       = hostState.phase !== "day";
     $("#btnHostResolveVote").disabled  = hostState.phase !== "vote";
     $("#btnHostNextNight").disabled    = hostState.phase !== "day";
@@ -859,8 +916,18 @@ function renderActionArea() {
   const alive   = !!me?.alive;
 
   if (!alive) {
-    area.appendChild(el("div", {class:"hint", text:"You are dead. You can still watch the game state."}));
+    const spectator = !myRole && phase !== "ended";
+    area.appendChild(el("div", {class:"hint", text: spectator
+      ? "You're spectating — the game was already in progress when you joined. You'll be dealt in next game."
+      : "You are dead. You can still watch the game state."}));
     return;
+  }
+
+  if (myRole === "Mafia" && myMafiaTeam.length) {
+    area.appendChild(el("div", {class:"chip"}, [
+      el("span", {text:"🔫"}),
+      el("span", {text: `Your Mafia: ${myMafiaTeam.join(", ")}`}),
+    ]));
   }
 
   if (myPoliceMemo) {
@@ -942,6 +1009,7 @@ function renderActionArea() {
     const grid = el("div", {class:"grid"});
     for (const p of players) {
       if (!p.alive) continue;
+      if (p.id === myId) continue; // can't vote for yourself
       const btn = el("button", {class:"btn", onclick: () => submitVote(p.id)});
       btn.textContent = p.name;
       grid.appendChild(btn);
@@ -1034,6 +1102,10 @@ $("#btnJoin").addEventListener("click", async () => {
   roomCode = ($("#inpRoom").value || "").trim().toUpperCase().slice(0, 4);
 
   if (roomCode.length !== 4) { toast("Enter a 4-character room code."); return; }
+  if ([...roomCode].some(ch => !CODE_ALPHABET.includes(ch))) {
+    toast("Invalid code. Room codes don't use O, I, 0 or 1.");
+    return;
+  }
 
   isHost = false;
   myRole = null;
@@ -1078,6 +1150,7 @@ $("#btnLeaveLobby").addEventListener("click", ()  => { cleanupAll(); showView("h
 $("#btnLeaveGame").addEventListener("click",  ()  => { cleanupAll(); showView("home"); setTheme(manualTheme); });
 $("#btnStartGame").addEventListener("click",  ()  => { if (isHost) hostStartGame(); });
 
+$("#btnHostResolveNight").addEventListener("click", () => { if (isHost) hostMaybeResolveNight(true); });
 $("#btnHostToVote").addEventListener("click",      () => { if (isHost) hostStartVoting(); });
 $("#btnHostResolveVote").addEventListener("click", () => { if (isHost) hostResolveVote(true); });
 $("#btnHostNextNight").addEventListener("click",   () => { if (isHost) hostNextNight(); });
@@ -1096,8 +1169,9 @@ function cleanupAll() {
   peer = null;
 
   isHost = false; roomCode = null; myId = null;
-  myRole = null; myPoliceMemo = "";
+  myRole = null; myPoliceMemo = ""; myMafiaTeam = [];
   publicState = null; hostState = null;
+  lastRenderedPhase = null; themePhase = null;
 
   $("#netStatus").textContent  = "Idle";
   $("#roomCode").textContent   = "----";
