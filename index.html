@@ -106,6 +106,16 @@
             </div>
           </div>
 
+          <div class="lobby-settings" id="lobbySettings" hidden>
+            <label class="opt" for="optAutoClose">
+              <input type="checkbox" id="optAutoClose" />
+              <span class="opt-text">
+                <span class="opt-title">Auto-close voting</span>
+                <span class="opt-sub">End the vote as soon as everyone has voted.</span>
+              </span>
+            </label>
+          </div>
+
           <div class="list" id="lobbyPlayers"></div>
           <p class="hint" id="lobbyHint"></p>
         </div>
@@ -147,6 +157,7 @@
             <button id="btnHostToVote" class="btn primary">Start Voting</button>
             <button id="btnHostResolveVote" class="btn">Resolve Vote</button>
             <button id="btnHostNextNight" class="btn">Next Night</button>
+            <button id="btnHostPlayAgain" class="btn primary">Play again · same players</button>
           </div>
         </div>
 

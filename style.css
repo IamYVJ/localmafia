@@ -423,6 +423,49 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-so
   flex-wrap: wrap;
 }
 
+/* ── Lobby settings (host options) ── */
+.lobby-settings { margin-top: 14px; }
+.opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.opt input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  flex: none;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+.opt input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.opt input[type="checkbox"]:checked::after {
+  content: "✓";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--accent-contrast);
+  font-size: 13px;
+  font-weight: 700;
+}
+.opt-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.opt-title { font-weight: 550; font-size: 14px; }
+.opt-sub { font-size: 12px; color: var(--muted); line-height: 1.45; }
+
 /* ── Divider ── */
 .divider { height: 1px; background: var(--border); margin: 16px 0; }
 

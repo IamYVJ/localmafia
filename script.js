@@ -124,6 +124,7 @@ let myName     = "";
 let myRole     = null;   // delivered privately by Host
 let myPoliceMemo = "";   // latest private investigation result
 let myMafiaTeam  = [];   // names of fellow Mafia (Mafia only)
+let myVigilanteShots = null; // bullets remaining (Vigilante only)
 
 /** Host-only: map peerId → DataConnection */
 const conns = new Map();
@@ -160,17 +161,30 @@ function nowTime() {
 }
 
 function roleIcon(role) {
-  return ({Mafia:"🔫", Dentist:"🦷", Angel:"😇", Police:"👮", Citizen:"🧑"})[role] ?? "🎭";
+  return ({
+    Mafia:"🔫", Dentist:"🦷", Angel:"😇", Police:"👮",
+    Mayor:"🎩", Vigilante:"🎯", Jester:"🃏", Citizen:"🧑",
+  })[role] ?? "🎭";
 }
 
 function roleDesc(role) {
   return ({
-    Mafia:   "At night, choose someone to kill.",
-    Dentist: "At night, choose someone to silence (they can't vote tomorrow).",
-    Angel:   "At night, protect someone (prevents the Mafia kill).",
-    Police:  "At night, investigate someone (you learn Mafia or Innocent).",
-    Citizen: "No night action. Watch, discuss, vote."
+    Mafia:     "At night, choose someone to kill.",
+    Dentist:   "At night, choose someone to silence (they can't vote tomorrow).",
+    Angel:     "At night, protect someone (prevents a night kill).",
+    Police:    "At night, investigate someone (you learn Mafia or Innocent).",
+    Mayor:     "Town leader. Your vote counts twice during the day.",
+    Vigilante: "One bullet for the whole game — shoot someone at night.",
+    Jester:    "You win if the town votes to execute you.",
+    Citizen:   "No night action. Watch, discuss, vote."
   })[role] ?? "—";
+}
+
+/** Faction a role belongs to (used for win checks). Jester is neutral. */
+function roleTeam(role) {
+  if (role === "Mafia")  return "Mafia";
+  if (role === "Jester") return "Neutral";
+  return "Town";
 }
 
 function clampPhase(phase) { return phase || "lobby"; }
@@ -192,19 +206,29 @@ function newHostState(hostId, hostName) {
     },
     night: buildEmptyNight(),
     vote:  buildEmptyVote(),
-    winner: null,   // "Mafia" | "Town"
+    winner: null,   // "Mafia" | "Town" | "Jester"
+    settings: {
+      autoCloseVote: false,  // close the vote once everyone has voted
+    },
   };
 }
 
 function buildEmptyNight() {
-  return {mafia:{}, dentist:{}, angel:{}, police:{}, resolved:false, lastResult:null};
+  return {mafia:{}, dentist:{}, angel:{}, police:{}, vigilante:{}, resolved:false, lastResult:null};
 }
 function buildEmptyVote() {
   return {votes:{}, resolved:false, lastResult:null};
 }
 
-function hostAddLog(kind, text) {
-  hostState.log.push({ts: nowTime(), kind, text});
+/**
+ * Append a line to the game log.
+ * `secret` entries are bookkeeping that could reveal roles (e.g. which player
+ * acted at night). They are kept host-side for debugging but are stripped from
+ * every public snapshot, so no player — not even the host — sees them in the
+ * narrator.
+ */
+function hostAddLog(kind, text, secret = false) {
+  hostState.log.push({ts: nowTime(), kind, text, secret});
   if (hostState.log.length > 120) hostState.log.splice(0, hostState.log.length - 120);
 }
 
@@ -226,6 +250,14 @@ function hostEligibleVoters() {
     .filter(p => p.alive && !hostIsSilencedToday(p))
     .map(p => p.id);
 }
+/** Vote weight by role — the Mayor's vote counts double. */
+function hostVoteWeight(playerId) {
+  return hostState.players[playerId]?.role === "Mayor" ? 2 : 1;
+}
+/** Total ballot weight across all eligible voters (used for the majority threshold). */
+function hostEligibleWeight() {
+  return hostEligibleVoters().reduce((sum, id) => sum + hostVoteWeight(id), 0);
+}
 function hostComputeWin() {
   const mafia = hostMafiaAliveIds().length;
   const town  = hostTownAliveIds().length;
@@ -245,7 +277,7 @@ function buildPublicSnapshotFor(peerId) {
     phase: hostState.phase,
     day: hostState.day,
     winner: hostState.winner,
-    log: hostState.log.slice(-10),
+    log: hostState.log.filter(l => !l.secret).slice(-10),
     players: [],
     voteTallies: null,
     you: {id: peerId},
@@ -261,14 +293,14 @@ function buildPublicSnapshotFor(peerId) {
 
   if (hostState.phase === "vote") {
     const tallies = {};
-    for (const target of Object.values(hostState.vote.votes)) {
+    for (const [voterId, target] of Object.entries(hostState.vote.votes)) {
       if (!target) continue;
-      tallies[target] = (tallies[target] || 0) + 1;
+      tallies[target] = (tallies[target] || 0) + hostVoteWeight(voterId);
     }
-    const eligible = hostEligibleVoters();
+    const totalWeight = hostEligibleWeight();
     ps.voteTallies = {
-      eligible: eligible.length,
-      majority: Math.floor(eligible.length / 2) + 1,
+      eligible: totalWeight,
+      majority: Math.floor(totalWeight / 2) + 1,
       tallies,
     };
   }
@@ -297,13 +329,23 @@ function hostSendPrivateRole(playerId) {
   if (playerId === hostState.roomCode) {
     // Host is this device
     myRole = p.role;
+    myVigilanteShots = p.vigilanteShots;
     $("#roleCard").style.display = "flex";
     renderRoleCard();
     return;
   }
 
   const conn = conns.get(playerId);
-  if (conn && conn.open) conn.send({t: "private_role", role: p.role});
+  if (conn && conn.open) conn.send({t: "private_role", role: p.role, shots: p.vigilanteShots});
+}
+
+/** Refresh a player's private extras (e.g. remaining bullets) without re-toasting their role. */
+function hostSendRoleInfo(playerId) {
+  const p = hostState.players[playerId];
+  if (!p) return;
+  if (playerId === hostState.roomCode) { myVigilanteShots = p.vigilanteShots; return; }
+  const conn = conns.get(playerId);
+  if (conn && conn.open) conn.send({t: "role_info", shots: p.vigilanteShots});
 }
 
 function hostSendInvestigation(policeId, targetId) {
@@ -315,13 +357,13 @@ function hostSendInvestigation(policeId, targetId) {
 
   if (policeId === hostState.roomCode) {
     myPoliceMemo = `${target.name} is ${result}.`;
-    hostAddLog("muted", `👮 Investigation delivered privately to ${police.name}.`);
+    hostAddLog("muted", `👮 Investigation delivered privately to ${police.name}.`, true);
     return;
   }
 
   const conn = conns.get(policeId);
   if (conn && conn.open) conn.send({t: "investigation", targetName: target.name, result});
-  hostAddLog("muted", `👮 Investigation delivered privately to ${police.name}.`);
+  hostAddLog("muted", `👮 Investigation delivered privately to ${police.name}.`, true);
 }
 
 /* ═══════════════════════════════════════════
@@ -331,23 +373,33 @@ function hostAssignRoles() {
   const ids = Object.keys(hostState.players);
   const n   = ids.length;
 
-  const mafiaCount  = n >= 7 ? 2 : 1;
-  const wantPolice  = n >= 4;
-  const wantAngel   = n >= 5;
-  const wantDentist = n >= 6;
+  // Roles unlock progressively as the table grows (max 10 players).
+  const mafiaCount    = n >= 7 ? 2 : 1;
+  const wantPolice    = n >= 4;
+  const wantAngel     = n >= 5;
+  const wantDentist   = n >= 6;
+  const wantMayor     = n >= 8;
+  const wantVigilante = n >= 9;
+  const wantJester    = n >= 10;
 
   const deck = [];
   for (let i = 0; i < mafiaCount; i++) deck.push("Mafia");
-  if (wantPolice)  deck.push("Police");
-  if (wantAngel)   deck.push("Angel");
-  if (wantDentist) deck.push("Dentist");
+  if (wantPolice)    deck.push("Police");
+  if (wantAngel)     deck.push("Angel");
+  if (wantDentist)   deck.push("Dentist");
+  if (wantMayor)     deck.push("Mayor");
+  if (wantVigilante) deck.push("Vigilante");
+  if (wantJester)    deck.push("Jester");
   while (deck.length < n) deck.push("Citizen");
 
   shuffle(ids);
   shuffle(deck);
 
   for (let i = 0; i < n; i++) {
-    hostState.players[ids[i]].role = deck[i];
+    const p = hostState.players[ids[i]];
+    p.role = deck[i];
+    // Vigilante gets a single bullet for the whole game.
+    p.vigilanteShots = (p.role === "Vigilante") ? 1 : null;
   }
 
   hostAddLog("ok", "Roles assigned. Night falls.");
@@ -424,6 +476,35 @@ function hostEndGame(win) {
   hostBroadcastState();
 }
 
+/**
+ * Return the finished room to the lobby with the same connected players.
+ * Roles, deaths and per-round state are wiped so the host can adjust the
+ * roster (people leave/join) and start a fresh game. Players who already
+ * disconnected are dropped.
+ */
+function hostReturnToLobby() {
+  if (hostState.phase !== "ended") return;
+
+  for (const id of Object.keys(hostState.players)) {
+    const p = hostState.players[id];
+    if (!p.connected && !p.isHost) { delete hostState.players[id]; continue; }
+    p.role           = null;
+    p.silencedForDay = null;
+    p.alive          = true;
+    p.vigilanteShots = null;
+  }
+
+  hostState.phase  = "lobby";
+  hostState.day    = 0;
+  hostState.winner = null;
+  hostState.night  = buildEmptyNight();
+  hostState.vote   = buildEmptyVote();
+  hostState.log    = [{ts: nowTime(), kind: "muted",
+    text: "Back in the lobby. Players can leave or join, then the Host starts again."}];
+
+  hostBroadcastState();
+}
+
 function hostExecutePlayer(playerId, reasonText) {
   const p = hostState.players[playerId];
   if (!p || !p.alive) return;
@@ -435,22 +516,22 @@ function hostExecutePlayer(playerId, reasonText) {
 function hostResolveVote(force = false) {
   if (hostState.phase !== "vote") return;
 
-  const eligible = hostEligibleVoters();
-  const majority = Math.floor(eligible.length / 2) + 1;
+  // Tally weighted votes (Mayor counts double); majority is of the total weight.
+  const majority = Math.floor(hostEligibleWeight() / 2) + 1;
   const tally    = {};
 
-  for (const voterId of eligible) {
+  for (const voterId of hostEligibleVoters()) {
     const t = hostState.vote.votes[voterId] || null;
     if (!t) continue;
     if (!hostState.players[t]?.alive) continue;
-    tally[t] = (tally[t] || 0) + 1;
+    tally[t] = (tally[t] || 0) + hostVoteWeight(voterId);
 
     // Auto-execute on majority (unless we're just force-resolving)
     if (!force && tally[t] >= majority) {
       hostExecutePlayer(t, `🗳️ Majority vote. ${hostState.players[t].name} was executed.`);
       hostState.vote.resolved = true;
       hostState.vote.lastResult = {executedId: t, tie: false};
-      hostAfterVoteAdvance();
+      hostAfterExecution(t);
       return;
     }
   }
@@ -469,13 +550,26 @@ function hostResolveVote(force = false) {
     hostAddLog("muted", "No execution today.");
     hostState.vote.resolved    = true;
     hostState.vote.lastResult  = {executedId: null, tie: true};
-    hostAfterVoteAdvance();
+    hostAfterExecution(null);
     return;
   }
 
   hostExecutePlayer(bestId, `🗳️ ${hostState.players[bestId].name} was executed by vote.`);
   hostState.vote.resolved   = true;
   hostState.vote.lastResult = {executedId: bestId, tie: false};
+  hostAfterExecution(bestId);
+}
+
+/**
+ * After a day execution: a Jester voted out wins immediately and ends the game;
+ * otherwise check the normal win conditions and advance to the next day.
+ */
+function hostAfterExecution(executedId) {
+  if (executedId && hostState.players[executedId]?.role === "Jester") {
+    hostAddLog("ok", `🃏 ${hostState.players[executedId].name} was the Jester — and wanted to be voted out. Jester wins!`);
+    hostEndGame("Jester");
+    return;
+  }
   hostAfterVoteAdvance();
 }
 
@@ -495,16 +589,20 @@ function hostHandleNightAction(fromId, action, targetId) {
   if (targetId !== null && !hostState.players[targetId]?.alive) return;
 
   const valid = {
-    mafia_kill:          {role:"Mafia",   bag:"mafia"},
-    dentist_silence:     {role:"Dentist", bag:"dentist"},
-    angel_protect:       {role:"Angel",   bag:"angel"},
-    police_investigate:  {role:"Police",  bag:"police"},
+    mafia_kill:          {role:"Mafia",     bag:"mafia"},
+    dentist_silence:     {role:"Dentist",   bag:"dentist"},
+    angel_protect:       {role:"Angel",     bag:"angel"},
+    police_investigate:  {role:"Police",    bag:"police"},
+    vigilante_shoot:     {role:"Vigilante", bag:"vigilante"},
   }[action];
 
   if (!valid || actor.role !== valid.role) return;
 
+  // Vigilante can only fire if they still have a bullet (skipping is always allowed).
+  if (action === "vigilante_shoot" && targetId !== null && (actor.vigilanteShots || 0) <= 0) return;
+
   hostState.night[valid.bag][fromId] = targetId;
-  hostAddLog("muted", `${roleIcon(actor.role)} Action received (${actor.name}).`);
+  hostAddLog("muted", `${roleIcon(actor.role)} Action received (${actor.name}).`, true);
 
   if (action === "police_investigate" && targetId) {
     hostSendInvestigation(fromId, targetId);
@@ -524,40 +622,65 @@ function hostMaybeResolveNight(force = false) {
   if (!force) {
     const byRole = (role) => alive.filter(p => p.role === role).map(p => p.id);
     const allIn  = (ids, bag) => ids.every(id => Object.hasOwn(bag, id));
+    // Only wait on a Vigilante who still has a bullet — out-of-ammo ones have no action.
+    const armedVigilantes = alive
+      .filter(p => p.role === "Vigilante" && (p.vigilanteShots || 0) > 0)
+      .map(p => p.id);
 
-    if (!allIn(byRole("Mafia"),   hostState.night.mafia))   return;
-    if (!allIn(byRole("Dentist"), hostState.night.dentist)) return;
-    if (!allIn(byRole("Angel"),   hostState.night.angel))   return;
-    if (!allIn(byRole("Police"),  hostState.night.police))  return;
+    if (!allIn(byRole("Mafia"),   hostState.night.mafia))     return;
+    if (!allIn(byRole("Dentist"), hostState.night.dentist))   return;
+    if (!allIn(byRole("Angel"),   hostState.night.angel))     return;
+    if (!allIn(byRole("Police"),  hostState.night.police))    return;
+    if (!allIn(armedVigilantes,   hostState.night.vigilante)) return;
   } else {
     hostAddLog("muted", "Host resolved the night early.");
   }
 
   hostState.night.resolved = true;
 
-  const mafiaTarget   = pluralityPick(Object.values(hostState.night.mafia).filter(Boolean));
-  const angelTarget   = firstNonNull(Object.values(hostState.night.angel));
-  const silenceTarget = firstNonNull(Object.values(hostState.night.dentist));
+  const mafiaTarget     = pluralityPick(Object.values(hostState.night.mafia).filter(Boolean));
+  const angelTarget     = firstNonNull(Object.values(hostState.night.angel));
+  const silenceTarget   = firstNonNull(Object.values(hostState.night.dentist));
+  const vigilanteTarget = firstNonNull(Object.values(hostState.night.vigilante));
 
   if (silenceTarget && hostState.players[silenceTarget]) {
     hostState.players[silenceTarget].silencedForDay = hostState.day + 1;
   }
 
-  const protectedHit = !!(mafiaTarget && angelTarget && mafiaTarget === angelTarget);
-  const killedId     = (!protectedHit && mafiaTarget) ? mafiaTarget : null;
+  // Spend the Vigilante's bullet if they actually fired.
+  for (const [vigId, tgt] of Object.entries(hostState.night.vigilante)) {
+    if (tgt && hostState.players[vigId]) {
+      hostState.players[vigId].vigilanteShots = Math.max(0, (hostState.players[vigId].vigilanteShots || 0) - 1);
+      hostSendRoleInfo(vigId);
+    }
+  }
 
-  if (killedId && hostState.players[killedId]) hostState.players[killedId].alive = false;
+  // An Angel's protection blocks any single night attack on that target.
+  const attacked = new Set();
+  if (mafiaTarget)     attacked.add(mafiaTarget);
+  if (vigilanteTarget) attacked.add(vigilanteTarget);
+  const blocked = !!(angelTarget && attacked.has(angelTarget));
+  if (angelTarget) attacked.delete(angelTarget);
+
+  const killedIds = [...attacked].filter(id => hostState.players[id]?.alive);
+  for (const id of killedIds) hostState.players[id].alive = false;
 
   // Announce results
   hostState.day += 1;
   hostState.phase = "day";
 
-  if (protectedHit && mafiaTarget) {
+  if (killedIds.length) {
+    for (const id of killedIds) {
+      hostAddLog("danger", `☠️ ${hostState.players[id].name} was found dead at dawn.`);
+    }
+  } else if (blocked) {
     hostAddLog("ok", "😇 Someone was attacked, but an Angel protected them.");
-  } else if (killedId) {
-    hostAddLog("danger", `☠️ ${hostState.players[killedId].name} was found dead at dawn.`);
   } else {
     hostAddLog("muted", "Dawn arrives. No one died tonight.");
+  }
+
+  if (blocked && killedIds.length) {
+    hostAddLog("ok", "😇 An Angel thwarted another attack in the night.");
   }
 
   if (silenceTarget && hostState.players[silenceTarget]) {
@@ -578,9 +701,21 @@ function hostHandleVote(fromId, targetId) {
   if (targetId !== null && !hostState.players[targetId]?.alive) return;
 
   hostState.vote.votes[fromId] = targetId;
-  hostAddLog("muted", `🗳️ Vote received (${voter.name}).`);
+  hostAddLog("muted", `🗳️ Vote received (${voter.name}).`, true);
   hostBroadcastState();
   hostResolveVote(false); // check for auto majority
+
+  // Optional: if the host enabled it, close voting as soon as every eligible
+  // player has cast a vote (or abstained) — even without a majority.
+  if (hostState.phase === "vote" && hostState.settings?.autoCloseVote) {
+    const eligible = hostEligibleVoters();
+    const allVoted = eligible.length > 0
+      && eligible.every(id => Object.hasOwn(hostState.vote.votes, id));
+    if (allVoted) {
+      hostAddLog("muted", "Everyone has voted — closing the vote.");
+      hostResolveVote(true);
+    }
+  }
 }
 
 /* ─ small helpers ─ */
@@ -620,6 +755,7 @@ function hostOnIncomingConnection(conn) {
         connected: true, alive: existing?.alive ?? true,
         role: existing?.role ?? null,
         silencedForDay: existing?.silencedForDay ?? null,
+        vigilanteShots: existing?.vigilanteShots ?? null,
       };
 
       // Late joiner after game started → spectator (no role, not alive)
@@ -695,9 +831,14 @@ function clientConnectToHost(code) {
       }
       if (msg.t === "private_role") {
         myRole = msg.role;
+        myVigilanteShots = msg.shots ?? null;
         $("#roleCard").style.display = "flex";
         renderRoleCard();
         toast(`Your role: ${myRole} ${roleIcon(myRole)}`);
+      }
+      if (msg.t === "role_info") {
+        myVigilanteShots = msg.shots ?? null;
+        renderAll();
       }
       if (msg.t === "mafia_team") {
         myMafiaTeam = Array.isArray(msg.names) ? msg.names : [];
@@ -766,6 +907,13 @@ function renderAll() {
   applyPhaseTheme(phase);
 
   if (phase === "lobby") {
+    // Returning to the lobby (new game with same players) — clear any role
+    // state left over from the previous round so nothing leaks or lingers.
+    myRole = null;
+    myPoliceMemo = "";
+    myMafiaTeam = [];
+    myVigilanteShots = null;
+    $("#roleCard").style.display = "none";
     showView("lobby");
     renderLobby();
   } else {
@@ -809,10 +957,20 @@ function renderLobby() {
 }
 
 function updateHostLobbyControls() {
-  if (!isHost) { $("#btnStartGame").style.display = "none"; return; }
+  const settings = $("#lobbySettings");
+  if (!isHost) {
+    $("#btnStartGame").style.display = "none";
+    if (settings) settings.hidden = true;
+    return;
+  }
   $("#btnStartGame").style.display = "inline-flex";
   const count = Object.keys(hostState.players).length;
   $("#btnStartGame").disabled = !(hostState.phase === "lobby" && count >= 4);
+
+  if (settings) {
+    settings.hidden = false;
+    $("#optAutoClose").checked = !!hostState.settings?.autoCloseVote;
+  }
 }
 
 function renderRoleCard() {
@@ -900,6 +1058,7 @@ function renderGame() {
     $("#btnHostToVote").disabled       = hostState.phase !== "day";
     $("#btnHostResolveVote").disabled  = hostState.phase !== "vote";
     $("#btnHostNextNight").disabled    = hostState.phase !== "day";
+    $("#btnHostPlayAgain").disabled    = hostState.phase !== "ended";
   }
 
   const me       = publicState?.players?.find(p => p.id === myId);
@@ -953,16 +1112,32 @@ function renderActionArea() {
       return;
     }
 
+    if (role === "Mayor") {
+      area.appendChild(el("div", {class:"hint", text:"Night: the Mayor sleeps. Your power is your double vote by day."}));
+      return;
+    }
+
     const specMap = {
-      Mafia:   {action:"mafia_kill",         title:"Choose a target to kill",       note:"Only the Mafia kills at night.", canSelf:false},
-      Dentist: {action:"dentist_silence",     title:"Choose a target to silence",    note:"Silenced players can't vote tomorrow.", canSelf:false},
-      Angel:   {action:"angel_protect",       title:"Choose someone to protect",     note:"Protection prevents the Mafia kill.", canSelf:true},
-      Police:  {action:"police_investigate",  title:"Choose someone to investigate", note:"You'll learn Mafia or Innocent (private).", canSelf:false},
+      Mafia:     {action:"mafia_kill",         title:"Choose a target to kill",       note:"Only the Mafia kills at night.", canSelf:false},
+      Dentist:   {action:"dentist_silence",     title:"Choose a target to silence",    note:"Silenced players can't vote tomorrow.", canSelf:false},
+      Angel:     {action:"angel_protect",       title:"Choose someone to protect",     note:"Protection prevents a night kill.", canSelf:true},
+      Police:    {action:"police_investigate",  title:"Choose someone to investigate", note:"You'll learn Mafia or Innocent (private).", canSelf:false},
+      Vigilante: {action:"vigilante_shoot",     title:"Choose someone to shoot",       note:"One bullet for the whole game. Choose wisely — or Skip.", canSelf:false},
     };
 
     const spec = specMap[role];
     if (!spec) {
       area.appendChild(el("div", {class:"hint", text:"No night action available."}));
+      return;
+    }
+
+    // Vigilante with no bullets left can only sit out the night.
+    if (role === "Vigilante" && (myVigilanteShots || 0) <= 0) {
+      area.appendChild(el("div", {class:"chip"}, [
+        el("span", {text:"🎯"}),
+        el("span", {text:"Out of bullets — your shot's been spent."}),
+      ]));
+      area.appendChild(el("div", {class:"hint", text:"Nothing to do tonight. Sit tight and watch."}));
       return;
     }
 
@@ -1011,6 +1186,12 @@ function renderActionArea() {
       area.appendChild(el("div", {class:"chip"}, [
         el("span", {text:"🗳️"}),
         el("span", {text:`Majority: ${vt.majority} of ${vt.eligible}`}),
+      ]));
+    }
+    if (myRole === "Mayor") {
+      area.appendChild(el("div", {class:"chip"}, [
+        el("span", {text:"🎩"}),
+        el("span", {text:"As Mayor, your vote counts twice."}),
       ]));
     }
     area.appendChild(el("div", {class:"hint", text:"Vote to execute a suspect. Majority executes immediately."}));
@@ -1182,6 +1363,16 @@ $("#btnHostResolveNight").addEventListener("click", () => { if (isHost) hostMayb
 $("#btnHostToVote").addEventListener("click",      () => { if (isHost) hostStartVoting(); });
 $("#btnHostResolveVote").addEventListener("click", () => { if (isHost) hostResolveVote(true); });
 $("#btnHostNextNight").addEventListener("click",   () => { if (isHost) hostNextNight(); });
+$("#btnHostPlayAgain").addEventListener("click",   () => { if (isHost) hostReturnToLobby(); });
+
+/* Host-only lobby setting: auto-close voting once everyone has voted. */
+$("#optAutoClose").addEventListener("change", (e) => {
+  if (!isHost || !hostState) return;
+  hostState.settings.autoCloseVote = e.target.checked;
+  toast(e.target.checked
+    ? "Voting will auto-close once everyone votes."
+    : "Auto-close voting disabled.");
+});
 
 /* ═══════════════════════════════════════════
    Cleanup / leave
@@ -1197,7 +1388,7 @@ function cleanupAll() {
   peer = null;
 
   isHost = false; roomCode = null; myId = null;
-  myRole = null; myPoliceMemo = ""; myMafiaTeam = [];
+  myRole = null; myPoliceMemo = ""; myMafiaTeam = []; myVigilanteShots = null;
   publicState = null; hostState = null;
   lastRenderedPhase = null; themePhase = null;
 
