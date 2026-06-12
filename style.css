@@ -243,6 +243,102 @@ header {
   color: var(--faint);
 }
 
+/* ── How to play (collapsible) ── */
+.howto {
+  max-width: 460px;
+  margin: 40px auto 0;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.howto summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 15px 18px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.howto summary::-webkit-details-marker { display: none; }
+.howto-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.howto-chev {
+  color: var(--muted);
+  font-size: 13px;
+  transition: transform .2s ease;
+}
+.howto[open] .howto-chev { transform: rotate(180deg); }
+
+.howto-body {
+  padding: 4px 18px 20px;
+  border-top: 1px solid var(--border);
+}
+.howto-block { margin-top: 18px; }
+.howto-h {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.howto-body p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.howto-body p b { color: var(--text); font-weight: 600; }
+.howto-note { font-size: 12.5px !important; color: var(--faint) !important; margin-bottom: 10px !important; }
+
+.howto-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.howto-steps li { font-size: 14px; line-height: 1.5; color: var(--muted); }
+.howto-steps li b { color: var(--text); font-weight: 600; }
+
+.howto-roles {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.howto-roles li {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.howto-roles li b { color: var(--text); font-weight: 600; }
+.r-ico {
+  flex: none;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 8px;
+  font-size: 15px;
+}
+
 /* ── Inputs ── */
 input {
   height: var(--tap);
