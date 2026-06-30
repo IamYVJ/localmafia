@@ -354,7 +354,7 @@ input {
   letter-spacing: -.01em;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-#inpRoom { font-family: var(--mono); letter-spacing: .22em; text-transform: uppercase; }
+#inpRoom, #inpTvRoom { font-family: var(--mono); letter-spacing: .22em; text-transform: uppercase; }
 input::placeholder { color: var(--faint); letter-spacing: -.01em; }
 input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
@@ -587,6 +587,97 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-so
   line-height: 1.45;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ═══════════ TV / Spectator view ═══════════
+   A shared big-screen display. Public info only — roles stay hidden until the
+   game ends, then every seat reveals its role.
+   ═══════════════════════════════════════════ */
+.tv { margin-top: 16px; }
+.tv-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.tv-phase-title {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(2.4rem, 6vw, 4.6rem);
+  line-height: 1;
+  letter-spacing: -.01em;
+}
+.tv-phase-sub {
+  color: var(--muted);
+  font-size: clamp(14px, 1.6vw, 19px);
+  margin-top: 8px;
+}
+.tv-meta { display: flex; align-items: center; gap: 10px; flex: none; }
+#tvLiveBadge { border-color: var(--accent); color: var(--accent); }
+
+.tv-body {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: 1.7fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .tv-body { grid-template-columns: 1fr; }
+}
+
+.tv-players {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.tv-card {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+  transition: opacity .25s ease, border-color .25s ease, background .25s ease;
+}
+.tv-card.dead { opacity: .48; }
+.tv-card.reveal { border-color: var(--border-2); background: var(--accent-soft); }
+.tv-card-ico { font-size: 30px; line-height: 1; }
+.tv-card-name {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(19px, 2.2vw, 28px);
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.tv-card-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tv-card.dead .tv-card-sub { color: var(--danger); }
+
+.tv-narrator {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 16px;
+  max-height: 62vh;
+  overflow: auto;
+}
+.tv-narrator .line { font-size: 14px; color: var(--text); line-height: 1.55; margin: 6px 0; }
+.tv-narrator .line:first-child { margin-top: 0; }
+.tv-narrator .line:last-child  { margin-bottom: 0; }
+.tv-narrator .line.muted  { color: var(--muted); }
+.tv-narrator .line.danger { color: var(--danger); }
+.tv-narrator .line.ok     { color: var(--ok); }
 
 /* ── Mobile ── */
 @media (max-width: 480px) {

@@ -55,6 +55,7 @@
           <div class="cta-row" id="ctaChoose">
             <button id="btnShowHost" class="btn mono primary" type="button">&gt; Host a game</button>
             <button id="btnShowJoin" class="btn mono" type="button">▷ Join a room</button>
+            <button id="btnShowTv" class="btn mono" type="button">📺 Watch on TV</button>
           </div>
 
           <div class="panel" id="panelHost" hidden>
@@ -71,6 +72,15 @@
             <div class="panel-row">
               <button class="btn mono back" data-back type="button">← Back</button>
               <button id="btnJoin" class="btn mono primary">Join →</button>
+            </div>
+          </div>
+
+          <div class="panel" id="panelTv" hidden>
+            <p class="hint" style="margin:0 0 2px;">A shared screen everyone can watch. Roles stay hidden until the game ends.</p>
+            <input id="inpTvRoom" maxlength="4" placeholder="Room code" aria-label="Room code" autocapitalize="characters" />
+            <div class="panel-row">
+              <button class="btn mono back" data-back type="button">← Back</button>
+              <button id="btnJoinTv" class="btn mono primary">Watch →</button>
             </div>
           </div>
 
@@ -210,6 +220,28 @@
           <h2>Players</h2>
           <div class="list" id="gamePlayers"></div>
           <p class="hint" id="gameHint"></p>
+        </div>
+      </section>
+
+      <!-- ═══════════ TV / SPECTATOR ═══════════ -->
+      <section id="viewTv" class="view">
+        <div class="tv">
+          <div class="tv-top">
+            <div class="tv-phase">
+              <div class="tv-phase-title" id="tvPhaseTitle">—</div>
+              <div class="tv-phase-sub" id="tvPhaseSub">—</div>
+            </div>
+            <div class="tv-meta">
+              <div class="chip">Room <code id="tvRoomCode">----</code></div>
+              <span class="badge" id="tvLiveBadge">📺 Spectating</span>
+              <button id="btnLeaveTv" class="btn small danger">Leave</button>
+            </div>
+          </div>
+
+          <div class="tv-body">
+            <div class="tv-players" id="tvPlayers"></div>
+            <div class="tv-narrator" id="tvNarrator"></div>
+          </div>
         </div>
       </section>
 

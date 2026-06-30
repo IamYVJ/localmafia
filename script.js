@@ -48,6 +48,7 @@ const views = {
   home:  $("#viewHome"),
   lobby: $("#viewLobby"),
   game:  $("#viewGame"),
+  tv:    $("#viewTv"),
 };
 
 function showView(name) {
@@ -59,10 +60,11 @@ function showView(name) {
 
 /** Home landing: collapse the host/join forms back to the two CTAs. */
 function resetHomePanels() {
-  const choose = $("#ctaChoose"), host = $("#panelHost"), join = $("#panelJoin");
+  const choose = $("#ctaChoose"), host = $("#panelHost"), join = $("#panelJoin"), tv = $("#panelTv");
   if (choose) choose.hidden = false;
   if (host)   host.hidden   = true;
   if (join)   join.hidden   = true;
+  if (tv)     tv.hidden     = true;
 }
 
 /* ═══════════════════════════════════════════
@@ -115,9 +117,10 @@ function toast(msg, ms = 2400) {
    ═══════════════════════════════════════════ */
 const APP_VERSION = "1.0";
 
-let peer       = null;   // PeerJS Peer instance
-let isHost     = false;
-let roomCode   = null;
+let peer        = null;  // PeerJS Peer instance
+let isHost      = false;
+let isSpectator = false; // TV / read-only viewer (sees public info only)
+let roomCode    = null;
 
 let myId       = null;   // this device's PeerJS ID
 let myName     = "";
@@ -327,12 +330,16 @@ function buildPublicSnapshotFor(peerId) {
     you: {id: peerId},
   };
 
+  const revealRoles = hostState.phase === "ended";
   for (const p of Object.values(hostState.players)) {
-    ps.players.push({
+    const entry = {
       id: p.id, name: p.name, isHost: !!p.isHost,
       connected: !!p.connected, alive: !!p.alive,
       silenced: (p.silencedForDay === hostState.day) && p.alive,
-    });
+    };
+    // Roles are only ever exposed once the game is over — never mid-game.
+    if (revealRoles) entry.role = p.role || null;
+    ps.players.push(entry);
   }
 
   if (hostState.phase === "vote") {
@@ -815,12 +822,21 @@ function hostOnIncomingConnection(conn) {
       const pid  = (typeof msg.pid === "string" && msg.pid) ? msg.pid : conn.peer;
       const name = sanitizeName(msg.name);
       conn._pid  = pid;
+      conn._spectator = msg.spectator === true;
 
       // Replace any stale connection still mapped to this pid (old socket from
       // before the reconnect).
       const prev = conns.get(pid);
       if (prev && prev !== conn) { try { prev.close(); } catch (_) {} }
       conns.set(pid, conn);
+
+      // TV / spectator: never becomes a player and never gets private info —
+      // it only receives the public snapshot (roles hidden until game ends).
+      if (conn._spectator) {
+        conn.send({t: "joined", roomCode: hostState.roomCode, youId: pid, spectator: true});
+        conn.send({t: "state", state: buildPublicSnapshotFor(pid)});
+        return;
+      }
 
       const existing  = hostState.players[pid];
       const rejoining = !!existing;
@@ -898,6 +914,9 @@ function hostOnIncomingConnection(conn) {
     // a fresh reconnect may have already replaced it.
     if (pid && conns.get(pid) === conn) conns.delete(pid);
 
+    // A TV leaving has no effect on game state.
+    if (conn._spectator) return;
+
     // Host is tearing the room down — don't resurrect a cleared session.
     if (intentionalLeave || !hostState) return;
 
@@ -933,7 +952,7 @@ function clientConnectToHost(code) {
     hostConn.on("open", () => {
       opened = true;
       $("#netStatus").textContent = "Connected";
-      hostConn.send({t: "join", name: myName, pid: myId, v: APP_VERSION});
+      hostConn.send({t: "join", name: myName, pid: myId, spectator: isSpectator, v: APP_VERSION});
       resolve();
     });
 
@@ -942,9 +961,10 @@ function clientConnectToHost(code) {
 
       if (msg.t === "joined") {
         roomCode = msg.roomCode;
-        $("#roomCode").textContent = roomCode;
+        $("#roomCode").textContent   = roomCode;
+        $("#tvRoomCode").textContent = roomCode;
         // Remember enough to auto-rejoin if this tab reloads or drops.
-        saveSession({isHost: false, roomCode, name: myName});
+        saveSession({isHost: false, spectator: isSpectator, roomCode, name: myName});
       }
       if (msg.t === "state") {
         publicState = msg.state;
@@ -1090,6 +1110,9 @@ function renderAll() {
 
   applyPhaseTheme(phase);
 
+  // TV / spectator gets its own read-only big-screen layout.
+  if (isSpectator) { showView("tv"); renderTv(); return; }
+
   if (phase === "lobby") {
     // Returning to the lobby (new game with same players) — clear any role
     // state left over from the previous round so nothing leaks or lingers.
@@ -1200,6 +1223,10 @@ function renderPlayersListGame() {
       const c = tallies[p.id] || 0;
       badges.appendChild(el("span", {class:"badge", text:`Votes: ${c}`}));
     }
+    // Roles are revealed to everyone once the game has ended.
+    if (phase === "ended" && p.role) {
+      badges.appendChild(el("span", {class:"badge", text:`${roleIcon(p.role)} ${p.role}`}));
+    }
 
     wrap.appendChild(el("div", {class:"item"}, [
       el("div", {class:"who"}, [
@@ -1208,6 +1235,79 @@ function renderPlayersListGame() {
       ]),
       badges,
     ]));
+  }
+}
+
+/* ═══════════════════════════════════════════
+   TV / Spectator rendering
+   Public information only. Roles are withheld until the game ends, then every
+   seat reveals its role.
+   ═══════════════════════════════════════════ */
+function renderTv() {
+  const phase = clampPhase(publicState?.phase);
+  const day   = publicState?.day || 0;
+  const ended = phase === "ended";
+
+  $("#tvRoomCode").textContent = roomCode || "----";
+
+  $("#tvPhaseTitle").textContent = {
+    lobby: "Lobby",
+    night: `Night ${day + 1}`,
+    day:   `Day ${day}`,
+    vote:  `Vote · Day ${day}`,
+    ended: "Game Over",
+  }[phase] ?? "—";
+
+  $("#tvPhaseSub").textContent = {
+    lobby: "Waiting for the host to start…",
+    night: "The town sleeps. Roles act in secret.",
+    day:   "The town wakes and debates.",
+    vote:  "The table votes to execute a suspect.",
+    ended: publicState?.winner ? `${publicState.winner} wins.` : "The game has ended.",
+  }[phase] ?? "—";
+
+  $("#tvLiveBadge").textContent = ended ? "✓ Roles revealed" : "📺 Spectating";
+
+  // Players
+  const wrap = $("#tvPlayers");
+  wrap.innerHTML = "";
+  const tallies = publicState?.voteTallies?.tallies || {};
+  const players = (publicState?.players || [])
+    .slice()
+    .sort((a, b) => (b.alive - a.alive) || (b.isHost - a.isHost) || a.name.localeCompare(b.name));
+
+  for (const p of players) {
+    const children = [];
+    if (ended) children.push(el("div", {class: "tv-card-ico", text: roleIcon(p.role)}));
+    children.push(el("div", {class: "tv-card-name", text: p.name}));
+
+    const sub = [p.alive ? "Alive" : "Dead"];
+    if (ended && p.role) sub.push(p.role);
+    if (p.silenced)      sub.push("Silenced");
+    if (!p.connected)    sub.push("Offline");
+    if (phase === "vote" && p.alive) {
+      const c = tallies[p.id] || 0;
+      sub.push(`${c} vote${c === 1 ? "" : "s"}`);
+    }
+    children.push(el("div", {class: "tv-card-sub", text: sub.join(" · ")}));
+
+    const cls = "tv-card" + (p.alive ? "" : " dead") + (ended ? " reveal" : "");
+    wrap.appendChild(el("div", {class: cls}, children));
+  }
+  if (!players.length) {
+    wrap.appendChild(el("div", {class: "hint", text: "Waiting for players to join…"}));
+  }
+
+  // Narrator (public log)
+  const nbox = $("#tvNarrator");
+  nbox.innerHTML = "";
+  const lines = publicState?.log || [];
+  if (!lines.length) {
+    nbox.appendChild(el("div", {class: "line muted", text: "—"}));
+  } else {
+    for (const ln of lines) {
+      nbox.appendChild(el("div", {class: `line ${ln.kind || "muted"}`, text: `[${ln.ts}] ${ln.text}`}));
+    }
   }
 }
 
@@ -1443,16 +1543,23 @@ $("#btnShowJoin").addEventListener("click", () => {
   $("#panelJoin").hidden = false;
   $("#inpJoinName").focus();
 });
+$("#btnShowTv").addEventListener("click", () => {
+  $("#ctaChoose").hidden = true;
+  $("#panelTv").hidden = false;
+  $("#inpTvRoom").focus();
+});
 document.querySelectorAll("[data-back]").forEach(b => b.addEventListener("click", resetHomePanels));
 
 /* Enter submits from the relevant input. */
 $("#inpName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#btnHost").click(); });
 $("#inpRoom").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#btnJoin").click(); });
 $("#inpJoinName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#inpRoom").focus(); });
+$("#inpTvRoom").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#btnJoinTv").click(); });
 
 $("#btnHost").addEventListener("click", async () => {
   myName = sanitizeName($("#inpName").value);
   isHost = true;
+  isSpectator = false;
   myId   = getStablePid();
   myRole = null;
   myPoliceMemo = "";
@@ -1506,6 +1613,7 @@ $("#btnJoin").addEventListener("click", async () => {
   }
 
   isHost = false;
+  isSpectator = false;
   myId   = getStablePid();
   myRole = null;
   myPoliceMemo = "";
@@ -1529,6 +1637,48 @@ $("#btnJoin").addEventListener("click", async () => {
   try {
     await clientConnectToHost(roomCode);
     toast("Joined room " + roomCode);
+  } catch(err) {
+    toast("Could not connect to Host. Check code and try again.");
+    cleanupAll(); showView("home"); setTheme(manualTheme);
+  }
+});
+
+/* Join as a TV / spectator — read-only public view, roles hidden until the end. */
+$("#btnJoinTv").addEventListener("click", async () => {
+  myName   = "TV";
+  roomCode = ($("#inpTvRoom").value || "").trim().toUpperCase().slice(0, 4);
+
+  if (roomCode.length !== 4) { toast("Enter a 4-character room code."); return; }
+  if ([...roomCode].some(ch => !CODE_ALPHABET.includes(ch))) {
+    toast("Invalid code. Room codes don't use O, I, 0 or 1.");
+    return;
+  }
+
+  isHost = false;
+  isSpectator = true;
+  myId   = getStablePid();
+  myRole = null;
+  myPoliceMemo = "";
+  intentionalLeave = false;
+  hostClosing = false;
+  reconnectAttempts = 0;
+  publicState  = {phase:"lobby", players:[]};
+  $("#tvRoomCode").textContent = roomCode;
+  $("#netStatus").textContent  = "Connecting…";
+  showView("tv");
+  renderTv();
+
+  try {
+    await createPeerWithId(null);
+  } catch(err) {
+    toast("Peer error: " + (err?.type || err?.message || "unknown"));
+    cleanupAll(); showView("home"); setTheme(manualTheme);
+    return;
+  }
+
+  try {
+    await clientConnectToHost(roomCode);
+    toast("Watching room " + roomCode);
   } catch(err) {
     toast("Could not connect to Host. Check code and try again.");
     cleanupAll(); showView("home"); setTheme(manualTheme);
@@ -1577,6 +1727,7 @@ function hostNotifyClosing() {
 
 $("#btnLeaveLobby").addEventListener("click", leaveRoom);
 $("#btnLeaveGame").addEventListener("click",  leaveRoom);
+$("#btnLeaveTv").addEventListener("click",    leaveRoom);
 $("#btnStartGame").addEventListener("click",  ()  => { if (isHost) hostStartGame(); });
 
 $("#btnHostResolveNight").addEventListener("click", () => { if (isHost) hostMaybeResolveNight(true); });
@@ -1612,7 +1763,7 @@ function cleanupAll() {
   try { if (peer && !peer.destroyed) peer.destroy(); } catch(_) {}
   peer = null;
 
-  isHost = false; roomCode = null; myId = null; myPeerId = null;
+  isHost = false; isSpectator = false; roomCode = null; myId = null; myPeerId = null;
   myRole = null; myPoliceMemo = ""; myMafiaTeam = []; myVigilanteShots = null;
   publicState = null; hostState = null;
   lastRenderedPhase = null; themePhase = null;
@@ -1620,8 +1771,9 @@ function cleanupAll() {
 
   $("#netStatus").textContent  = "Idle";
   $("#roomCode").textContent   = "----";
+  $("#tvRoomCode").textContent = "----";
   $("#roleCard").style.display = "none";
-  ["narrator","lobbyPlayers","gamePlayers","actionArea"].forEach(id => { $("#"+id).innerHTML = ""; });
+  ["narrator","lobbyPlayers","gamePlayers","actionArea","tvPlayers","tvNarrator"].forEach(id => { $("#"+id).innerHTML = ""; });
   $("#hostControls").style.display = "none";
 }
 
@@ -1670,19 +1822,26 @@ async function resumeHost(s) {
   toast("Room restored: " + roomCode);
 }
 
-/** Rejoin a room we were a guest in before the reload. */
+/** Rejoin a room we were a guest (or TV spectator) in before the reload. */
 async function resumeClient(s) {
   isHost = false;
+  isSpectator = !!s.spectator;
   myName = s.name;
   myId   = getStablePid();
   roomCode = s.roomCode;
   intentionalLeave = false; hostClosing = false; reconnectAttempts = 0;
 
   publicState = {phase: "lobby", players: []};
-  $("#roomCode").textContent  = roomCode;
   $("#netStatus").textContent = "Reconnecting…";
-  showView("lobby");
-  renderLobby();
+  if (isSpectator) {
+    $("#tvRoomCode").textContent = roomCode;
+    showView("tv");
+    renderTv();
+  } else {
+    $("#roomCode").textContent = roomCode;
+    showView("lobby");
+    renderLobby();
+  }
 
   try { await clientReconnectOnce(); toast("Reconnected to " + roomCode); }
   catch (_) { scheduleClientReconnect(); }
