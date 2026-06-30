@@ -139,6 +139,49 @@ let publicState = null;
 let hostState = null;
 
 /* ═══════════════════════════════════════════
+   Stable identity, session persistence & reconnection
+
+   PeerJS hands every connection a fresh random id, so we can't use it to
+   recognise a player who reloads or drops. Instead each device mints a
+   STABLE player id (kept in sessionStorage, so it survives a reload) and
+   sends it on every join. The Host keys players by this id, which lets a
+   returning player reclaim their seat — role, life and all.
+   ═══════════════════════════════════════════ */
+
+/** Per-tab stable player id — survives a reload so the Host can recognise a
+ *  reconnecting player. Per-tab (sessionStorage) keeps two tabs on one machine
+ *  distinct, which is handy for local testing. */
+function getStablePid() {
+  let id = sessionStorage.getItem("lm_pid");
+  if (!id) {
+    id = "p-" + Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
+    sessionStorage.setItem("lm_pid", id);
+  }
+  return id;
+}
+
+let myPeerId         = null;  // transient PeerJS id (changes every session)
+let intentionalLeave = false; // user tapped Leave — suppress auto-reconnect
+let hostClosing      = false; // Host told us the room is shutting down
+let reconnectTimer   = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 30;
+
+/** Persisted snapshot of "what am I in the middle of", so a reload can resume. */
+const SESSION_KEY = "lm_session";
+function saveSession(obj) {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(obj)); } catch (_) {}
+}
+function clearSession() {
+  try { sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
+}
+function loadSession() {
+  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (_) { return null; }
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/* ═══════════════════════════════════════════
    Utilities
    ═══════════════════════════════════════════ */
 
@@ -192,15 +235,16 @@ function clampPhase(phase) { return phase || "lobby"; }
 /* ═══════════════════════════════════════════
    Host: authoritative state factory
    ═══════════════════════════════════════════ */
-function newHostState(hostId, hostName) {
+function newHostState(roomCode, hostPid, hostName) {
   return {
-    roomCode: hostId,
+    roomCode,          // the 4-char PeerJS room id players connect to
+    hostPid,           // the host's STABLE player id (key into players)
     phase: "lobby",   // lobby | night | day | vote | ended
     day: 0,
     log: [{ts: nowTime(), kind: "muted", text: "Room created. Waiting for players…"}],
     players: {
-      [hostId]: {
-        id: hostId, name: hostName, isHost: true,
+      [hostPid]: {
+        id: hostPid, name: hostName, isHost: true,
         connected: true, alive: true, role: null, silencedForDay: null,
       }
     },
@@ -309,8 +353,10 @@ function buildPublicSnapshotFor(peerId) {
 }
 
 function hostBroadcastState() {
+  // Persist the authoritative state so the Host can recover from a reload.
+  saveSession({isHost: true, roomCode: hostState.roomCode, name: myName, hostState});
   // Host renders its own UI first…
-  publicState = buildPublicSnapshotFor(hostState.roomCode);
+  publicState = buildPublicSnapshotFor(hostState.hostPid);
   renderAll();
   // …then sends personalised snapshots to each connected client.
   for (const [pid, conn] of conns.entries()) {
@@ -326,7 +372,7 @@ function hostSendPrivateRole(playerId) {
   const p = hostState.players[playerId];
   if (!p) return;
 
-  if (playerId === hostState.roomCode) {
+  if (playerId === hostState.hostPid) {
     // Host is this device
     myRole = p.role;
     myVigilanteShots = p.vigilanteShots;
@@ -343,7 +389,7 @@ function hostSendPrivateRole(playerId) {
 function hostSendRoleInfo(playerId) {
   const p = hostState.players[playerId];
   if (!p) return;
-  if (playerId === hostState.roomCode) { myVigilanteShots = p.vigilanteShots; return; }
+  if (playerId === hostState.hostPid) { myVigilanteShots = p.vigilanteShots; return; }
   const conn = conns.get(playerId);
   if (conn && conn.open) conn.send({t: "role_info", shots: p.vigilanteShots});
 }
@@ -355,7 +401,10 @@ function hostSendInvestigation(policeId, targetId) {
 
   const result = target.role === "Mafia" ? "Mafia" : "Innocent";
 
-  if (policeId === hostState.roomCode) {
+  // Remember this night's result so a reconnecting Police gets it re-sent.
+  police.lastInvestigation = {targetName: target.name, result};
+
+  if (policeId === hostState.hostPid) {
     myPoliceMemo = `${target.name} is ${result}.`;
     hostAddLog("muted", `👮 Investigation delivered privately to ${police.name}.`, true);
     return;
@@ -418,7 +467,7 @@ function hostSendMafiaTeams() {
       .filter(other => other !== id)
       .map(other => hostState.players[other].name);
 
-    if (id === hostState.roomCode) {
+    if (id === hostState.hostPid) {
       myMafiaTeam = names;
       continue;
     }
@@ -448,6 +497,7 @@ function hostStartGame() {
   hostAssignRoles();
   hostState.phase = "night";
   hostState.night = buildEmptyNight();
+  hostClearInvestigations();
   hostBroadcastState();
 }
 
@@ -465,8 +515,14 @@ function hostNextNight() {
   if (win) { return hostEndGame(win); }
   hostState.phase = "night";
   hostState.night = buildEmptyNight();
+  hostClearInvestigations();
   hostAddLog("muted", "Night falls. Roles, act in secret.");
   hostBroadcastState();
+}
+
+/** Wipe last-night's private Police results so they aren't re-sent next night. */
+function hostClearInvestigations() {
+  for (const p of Object.values(hostState.players)) p.lastInvestigation = null;
 }
 
 function hostEndGame(win) {
@@ -620,11 +676,13 @@ function hostMaybeResolveNight(force = false) {
   if (!alive.some(p => p.role)) return;
 
   if (!force) {
-    const byRole = (role) => alive.filter(p => p.role === role).map(p => p.id);
+    // Only wait on players who are still connected — a dropped player must not
+    // stall the night (they can rejoin and act if the night hasn't resolved).
+    const byRole = (role) => alive.filter(p => p.role === role && p.connected).map(p => p.id);
     const allIn  = (ids, bag) => ids.every(id => Object.hasOwn(bag, id));
     // Only wait on a Vigilante who still has a bullet — out-of-ammo ones have no action.
     const armedVigilantes = alive
-      .filter(p => p.role === "Vigilante" && (p.vigilanteShots || 0) > 0)
+      .filter(p => p.role === "Vigilante" && p.connected && (p.vigilanteShots || 0) > 0)
       .map(p => p.id);
 
     if (!allIn(byRole("Mafia"),   hostState.night.mafia))     return;
@@ -704,17 +762,22 @@ function hostHandleVote(fromId, targetId) {
   hostAddLog("muted", `🗳️ Vote received (${voter.name}).`, true);
   hostBroadcastState();
   hostResolveVote(false); // check for auto majority
+  hostMaybeAutoCloseVote();
+}
 
-  // Optional: if the host enabled it, close voting as soon as every eligible
-  // player has cast a vote (or abstained) — even without a majority.
-  if (hostState.phase === "vote" && hostState.settings?.autoCloseVote) {
-    const eligible = hostEligibleVoters();
-    const allVoted = eligible.length > 0
-      && eligible.every(id => Object.hasOwn(hostState.vote.votes, id));
-    if (allVoted) {
-      hostAddLog("muted", "Everyone has voted — closing the vote.");
-      hostResolveVote(true);
-    }
+/**
+ * Optional host setting: close the vote as soon as every *connected* eligible
+ * player has cast a ballot (or abstained), even without a majority. Disconnected
+ * players are not waited on so a drop can't freeze the vote.
+ */
+function hostMaybeAutoCloseVote() {
+  if (hostState.phase !== "vote" || !hostState.settings?.autoCloseVote) return;
+  const eligible = hostEligibleVoters().filter(id => hostState.players[id]?.connected);
+  const allVoted = eligible.length > 0
+    && eligible.every(id => Object.hasOwn(hostState.vote.votes, id));
+  if (allVoted) {
+    hostAddLog("muted", "Everyone has voted — closing the vote.");
+    hostResolveVote(true);
   }
 }
 
@@ -739,63 +802,117 @@ function firstNonNull(arr) {
    PeerJS: Host — handle incoming connections
    ═══════════════════════════════════════════ */
 function hostOnIncomingConnection(conn) {
-  conn.on("open", () => {
-    conns.set(conn.peer, conn);
-  });
+  // We don't know who this is until the "join" message arrives carrying their
+  // stable player id, so the connection is registered (by pid) only then.
 
   conn.on("data", (msg) => {
     if (!msg || typeof msg !== "object") return;
+    if (!hostState) return;  // not ready yet (e.g. mid host-resume)
 
     if (msg.t === "join") {
+      // Fall back to the (transient) peer id only for ancient clients that
+      // don't send a stable pid — they simply won't be able to reconnect.
+      const pid  = (typeof msg.pid === "string" && msg.pid) ? msg.pid : conn.peer;
       const name = sanitizeName(msg.name);
-      const existing = hostState.players[conn.peer];
+      conn._pid  = pid;
 
-      hostState.players[conn.peer] = {
-        id: conn.peer, name, isHost: false,
-        connected: true, alive: existing?.alive ?? true,
-        role: existing?.role ?? null,
-        silencedForDay: existing?.silencedForDay ?? null,
-        vigilanteShots: existing?.vigilanteShots ?? null,
-      };
+      // Replace any stale connection still mapped to this pid (old socket from
+      // before the reconnect).
+      const prev = conns.get(pid);
+      if (prev && prev !== conn) { try { prev.close(); } catch (_) {} }
+      conns.set(pid, conn);
 
-      // Late joiner after game started → spectator (no role, not alive)
-      const isLateJoiner = hostState.phase !== "lobby" && !hostState.players[conn.peer].role;
-      if (isLateJoiner) {
-        hostState.players[conn.peer].alive = false;
+      const existing  = hostState.players[pid];
+      const rejoining = !!existing;
+
+      if (rejoining) {
+        // Returning player reclaims their seat — role, life, everything.
+        existing.name      = name;
+        existing.connected = true;
+      } else {
+        hostState.players[pid] = {
+          id: pid, name, isHost: false,
+          connected: true, alive: true,
+          role: null, silencedForDay: null, vigilanteShots: null,
+        };
       }
+      const player = hostState.players[pid];
 
-      conn.send({t: "joined", roomCode: hostState.roomCode, youId: conn.peer});
-      hostAddLog("ok", `${name} joined.`);
+      // Brand-new player arriving after kickoff → spectator (no role, not alive).
+      const isLateJoiner = !rejoining && hostState.phase !== "lobby";
+      if (isLateJoiner) player.alive = false;
+
+      conn.send({t: "joined", roomCode: hostState.roomCode, youId: pid});
+      hostAddLog("ok", rejoining ? `${name} reconnected.` : `${name} joined.`);
       hostBroadcastState();
 
       if (isLateJoiner) {
         conn.send({t: "toast", msg: "Game already in progress — you joined as a spectator."});
       }
 
-      // Resend private info if rejoining mid-game
-      if (hostState.phase !== "lobby" && hostState.players[conn.peer].role) {
-        hostSendPrivateRole(conn.peer);
-        if (hostState.players[conn.peer].role === "Mafia") hostSendMafiaTeams();
+      // Re-deliver private info to a player rejoining mid-game.
+      if (hostState.phase !== "lobby" && player.role) {
+        hostSendPrivateRole(pid);
+        hostSendRoleInfo(pid);
+        if (player.role === "Mafia") hostSendMafiaTeams();
+        if (player.lastInvestigation) {
+          conn.send({t: "investigation", ...player.lastInvestigation});
+        }
       }
+      return;
     }
 
-    if (msg.t === "night") hostHandleNightAction(conn.peer, msg.action, msg.targetId ?? null);
-    if (msg.t === "vote")  hostHandleVote(conn.peer, msg.targetId ?? null);
+    if (msg.t === "night") hostHandleNightAction(conn._pid, msg.action, msg.targetId ?? null);
+    if (msg.t === "vote")  hostHandleVote(conn._pid, msg.targetId ?? null);
+
+    if (msg.t === "leave") {
+      // Graceful exit: remove from play entirely (vs a silent drop, which stays
+      // reconnectable). In the lobby we delete the seat; mid-game they're out.
+      const pid = conn._pid;
+      const p = pid ? hostState.players[pid] : null;
+      if (p) {
+        if (hostState.phase === "lobby") {
+          delete hostState.players[pid];
+          hostAddLog("muted", `${p.name} left.`);
+        } else {
+          p.connected = false;
+          p.alive     = false;
+          hostAddLog("danger", `🚪 ${p.name} left the game.`);
+        }
+      }
+      if (pid && conns.get(pid) === conn) conns.delete(pid);
+      conn._left = true;  // suppress the duplicate handling in the close listener
+      try { conn.close(); } catch (_) {}
+      hostBroadcastState();
+      if (hostState.phase === "night") hostMaybeResolveNight();
+      else if (hostState.phase === "vote") { hostResolveVote(false); hostMaybeAutoCloseVote(); }
+      return;
+    }
   });
 
   conn.on("close", () => {
-    const p = hostState.players[conn.peer];
+    const pid = conn._pid;
+    // Already handled by a graceful "leave" message — nothing more to do.
+    if (conn._left) return;
+    // Only forget the mapping if this is still the live socket for that pid —
+    // a fresh reconnect may have already replaced it.
+    if (pid && conns.get(pid) === conn) conns.delete(pid);
+
+    // Host is tearing the room down — don't resurrect a cleared session.
+    if (intentionalLeave || !hostState) return;
+
+    const p = pid ? hostState.players[pid] : null;
     if (p) {
       p.connected = false;
-      if (hostState.phase !== "lobby" && p.alive) {
-        p.alive = false;
-        hostAddLog("danger", `⚡ ${p.name} disconnected and is out.`);
-      } else {
-        hostAddLog("muted", `${p.name} left.`);
-      }
+      hostAddLog("muted", hostState.phase === "lobby"
+        ? `${p.name} left.`
+        : `⚡ ${p.name} disconnected — they can rejoin with the room code.`);
     }
-    conns.delete(conn.peer);
+
     hostBroadcastState();
+    // A drop can unblock a pending round (we no longer wait on absent players).
+    if (hostState.phase === "night") hostMaybeResolveNight();
+    else if (hostState.phase === "vote") { hostResolveVote(false); hostMaybeAutoCloseVote(); }
   });
 
   conn.on("error", () => { /* non-fatal; remaining peers continue */ });
@@ -806,6 +923,7 @@ function hostOnIncomingConnection(conn) {
    ═══════════════════════════════════════════ */
 function clientConnectToHost(code) {
   return new Promise((resolve, reject) => {
+    let opened = false;  // did this socket ever connect? gates reconnect-on-close
     hostConn = peer.connect(code, {
       reliable: true,
       serialization: "json",
@@ -813,8 +931,9 @@ function clientConnectToHost(code) {
     });
 
     hostConn.on("open", () => {
+      opened = true;
       $("#netStatus").textContent = "Connected";
-      hostConn.send({t: "join", name: myName, v: APP_VERSION});
+      hostConn.send({t: "join", name: myName, pid: myId, v: APP_VERSION});
       resolve();
     });
 
@@ -824,6 +943,8 @@ function clientConnectToHost(code) {
       if (msg.t === "joined") {
         roomCode = msg.roomCode;
         $("#roomCode").textContent = roomCode;
+        // Remember enough to auto-rejoin if this tab reloads or drops.
+        saveSession({isHost: false, roomCode, name: myName});
       }
       if (msg.t === "state") {
         publicState = msg.state;
@@ -852,18 +973,73 @@ function clientConnectToHost(code) {
       if (msg.t === "toast") {
         toast(msg.msg);
       }
+      if (msg.t === "host_closing") {
+        // Graceful shutdown — don't try to reconnect to a room that's gone.
+        hostClosing = true;
+        toast("Host ended the room.");
+      }
     });
 
     hostConn.on("close", () => {
-      $("#netStatus").textContent = "Disconnected";
-      toast("Connection to Host closed.");
-      cleanupAll();
-      showView("home");
-      setTheme(manualTheme);
+      // A socket that never opened (e.g. bad room code) is handled by the
+      // caller's catch — don't kick off a reconnect loop to a dead room.
+      if (!opened) return;
+      if (intentionalLeave || hostClosing) {
+        finishLeave();
+      } else {
+        // Unexpected drop — try to climb back into the same room.
+        $("#netStatus").textContent = "Reconnecting…";
+        toast("Lost the Host — reconnecting…");
+        scheduleClientReconnect();
+      }
     });
 
     hostConn.on("error", reject);
   });
+}
+
+/* ── Client reconnection ── */
+
+/** One reconnect attempt: rebuild our peer (it may be dead) and rejoin. */
+async function clientReconnectOnce() {
+  try { if (peer && !peer.destroyed) peer.destroy(); } catch (_) {}
+  peer = null;
+  await createPeerWithId(null);          // fresh client peer
+  await clientConnectToHost(roomCode);   // rejoins with our STABLE pid
+}
+
+/** Retry connecting to the Host with a capped backoff until we're back in. */
+function scheduleClientReconnect() {
+  clearTimeout(reconnectTimer);
+  if (intentionalLeave || hostClosing) { finishLeave(); return; }
+
+  reconnectAttempts++;
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    toast("Couldn't reconnect to the Host. Returning home.");
+    finishLeave();
+    return;
+  }
+  $("#netStatus").textContent = `Reconnecting… (${reconnectAttempts})`;
+  const delay = Math.min(1000 * reconnectAttempts, 5000);
+
+  reconnectTimer = setTimeout(async () => {
+    if (intentionalLeave || hostClosing) { finishLeave(); return; }
+    try {
+      await clientReconnectOnce();
+      reconnectAttempts = 0;
+      $("#netStatus").textContent = "Connected";
+      toast("Reconnected.");
+    } catch (_) {
+      scheduleClientReconnect();
+    }
+  }, delay);
+}
+
+/** Tear down and return home (used on intentional leave / give-up). */
+function finishLeave() {
+  cleanupAll();
+  showView("home");
+  setTheme(manualTheme);
 }
 
 /* ═══════════════════════════════════════════
@@ -877,7 +1053,7 @@ function createPeerWithId(idOrNull) {
       reject(e); return;
     }
 
-    peer.on("open", (id) => { myId = id; resolve(id); });
+    peer.on("open", (id) => { myPeerId = id; resolve(id); });
 
     // Only the Host accepts inbound connections
     peer.on("connection", (conn) => {
@@ -885,8 +1061,15 @@ function createPeerWithId(idOrNull) {
       else conn.close();
     });
 
-    peer.on("disconnected", () => { $("#netStatus").textContent = "Peer disconnected"; });
-    peer.on("close",        () => { $("#netStatus").textContent = "Peer closed"; });
+    // A "disconnected" peer has lost the signaling server but its data channels
+    // may still be alive. Reconnect so new joins/rejoins can be brokered again.
+    peer.on("disconnected", () => {
+      $("#netStatus").textContent = "Signaling lost — reconnecting…";
+      if (!intentionalLeave && peer && !peer.destroyed) {
+        try { peer.reconnect(); } catch (_) {}
+      }
+    });
+    peer.on("close", () => { $("#netStatus").textContent = "Peer closed"; });
     peer.on("error", reject);
   });
 }
@@ -898,6 +1081,7 @@ let lastRenderedPhase = null;
 
 function renderAll() {
   if (!publicState) return;
+  if (intentionalLeave) return;  // mid-teardown: ignore any late snapshot
   const phase = clampPhase(publicState.phase);
 
   // A fresh night wipes any stale private investigation result.
@@ -1269,8 +1453,12 @@ $("#inpJoinName").addEventListener("keydown", (e) => { if (e.key === "Enter") $(
 $("#btnHost").addEventListener("click", async () => {
   myName = sanitizeName($("#inpName").value);
   isHost = true;
+  myId   = getStablePid();
   myRole = null;
   myPoliceMemo = "";
+  intentionalLeave = false;
+  hostClosing = false;
+  reconnectAttempts = 0;
   $("#netStatus").textContent = "Creating…";
   toast("Creating room…");
 
@@ -1297,12 +1485,13 @@ $("#btnHost").addEventListener("click", async () => {
     return;
   }
 
-  hostState  = newHostState(roomCode, myName);
-  publicState = buildPublicSnapshotFor(roomCode);
+  hostState   = newHostState(roomCode, myId, myName);
+  publicState = buildPublicSnapshotFor(myId);
   $("#roomCode").textContent  = roomCode;
   $("#netStatus").textContent = "Hosting";
   showView("lobby");
   renderLobby();
+  hostBroadcastState();  // persists the session for reload recovery
   toast("Room created: " + roomCode);
 });
 
@@ -1317,8 +1506,12 @@ $("#btnJoin").addEventListener("click", async () => {
   }
 
   isHost = false;
+  myId   = getStablePid();
   myRole = null;
   myPoliceMemo = "";
+  intentionalLeave = false;
+  hostClosing = false;
+  reconnectAttempts = 0;
   publicState  = {phase:"lobby", players:[]};
   $("#roomCode").textContent  = roomCode;
   $("#netStatus").textContent = "Connecting…";
@@ -1355,8 +1548,35 @@ $("#btnCopyCode").addEventListener("click", async () => {
   }
 });
 
-$("#btnLeaveLobby").addEventListener("click", ()  => { cleanupAll(); showView("home"); setTheme(manualTheme); });
-$("#btnLeaveGame").addEventListener("click",  ()  => { cleanupAll(); showView("home"); setTheme(manualTheme); });
+function leaveRoom() {
+  intentionalLeave = true;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+
+  if (isHost) {
+    hostNotifyClosing();   // tell clients not to reconnect to a dead room
+    finishLeave();
+    return;
+  }
+
+  // Client: tell the Host we're really leaving (so we're removed from play, not
+  // just held as reconnectable). Navigate home now, tear down after the message
+  // has a moment to flush over the reliable channel.
+  if (hostConn?.open) { try { hostConn.send({t: "leave"}); } catch (_) {} }
+  showView("home");
+  setTheme(manualTheme);
+  setTimeout(finishLeave, 200);
+}
+
+/** Host → all clients: the room is shutting down, stop trying to reconnect. */
+function hostNotifyClosing() {
+  for (const [, conn] of conns.entries()) {
+    if (conn && conn.open) { try { conn.send({t: "host_closing"}); } catch (_) {} }
+  }
+}
+
+$("#btnLeaveLobby").addEventListener("click", leaveRoom);
+$("#btnLeaveGame").addEventListener("click",  leaveRoom);
 $("#btnStartGame").addEventListener("click",  ()  => { if (isHost) hostStartGame(); });
 
 $("#btnHostResolveNight").addEventListener("click", () => { if (isHost) hostMaybeResolveNight(true); });
@@ -1378,6 +1598,11 @@ $("#optAutoClose").addEventListener("change", (e) => {
    Cleanup / leave
    ═══════════════════════════════════════════ */
 function cleanupAll() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  reconnectAttempts = 0;
+  clearSession();
+
   try { hostConn?.close(); } catch(_) {}
   hostConn = null;
 
@@ -1387,10 +1612,11 @@ function cleanupAll() {
   try { if (peer && !peer.destroyed) peer.destroy(); } catch(_) {}
   peer = null;
 
-  isHost = false; roomCode = null; myId = null;
+  isHost = false; roomCode = null; myId = null; myPeerId = null;
   myRole = null; myPoliceMemo = ""; myMafiaTeam = []; myVigilanteShots = null;
   publicState = null; hostState = null;
   lastRenderedPhase = null; themePhase = null;
+  intentionalLeave = false; hostClosing = false;
 
   $("#netStatus").textContent  = "Idle";
   $("#roomCode").textContent   = "----";
@@ -1399,5 +1625,79 @@ function cleanupAll() {
   $("#hostControls").style.display = "none";
 }
 
+/* ═══════════════════════════════════════════
+   Session resume (reconnect after a reload)
+   ═══════════════════════════════════════════ */
+
+/** Recreate the Host's room with the same code and restore authoritative state. */
+async function resumeHost(s) {
+  isHost = true;
+  myName = s.name;
+  myId   = getStablePid();
+  intentionalLeave = false; hostClosing = false; reconnectAttempts = 0;
+
+  $("#netStatus").textContent = "Restoring room…";
+  showView("lobby");
+  toast("Restoring your room…");
+
+  // The broker may hold the old id briefly after the previous peer died; retry.
+  let ok = false;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try { await createPeerWithId(s.roomCode); ok = true; break; }
+    catch (err) {
+      try { peer && peer.destroy(); } catch (_) {}
+      peer = null;
+      if (err?.type !== "unavailable-id") break;
+      await sleep(800);
+    }
+  }
+  if (!ok) { toast("Couldn't restore the room."); clearSession(); finishLeave(); return; }
+
+  roomCode  = s.roomCode;
+  hostState = s.hostState;
+  myId      = hostState.hostPid;  // align our id with the restored seat
+
+  // Every client's socket died with the old peer; mark them offline until they
+  // climb back in (they reconnect automatically with their stable ids).
+  for (const id of Object.keys(hostState.players)) {
+    if (id !== hostState.hostPid) hostState.players[id].connected = false;
+  }
+
+  $("#roomCode").textContent  = roomCode;
+  $("#netStatus").textContent = "Hosting";
+  hostAddLog("muted", "Host reconnected. Waiting for players to rejoin…");
+  hostBroadcastState();
+  toast("Room restored: " + roomCode);
+}
+
+/** Rejoin a room we were a guest in before the reload. */
+async function resumeClient(s) {
+  isHost = false;
+  myName = s.name;
+  myId   = getStablePid();
+  roomCode = s.roomCode;
+  intentionalLeave = false; hostClosing = false; reconnectAttempts = 0;
+
+  publicState = {phase: "lobby", players: []};
+  $("#roomCode").textContent  = roomCode;
+  $("#netStatus").textContent = "Reconnecting…";
+  showView("lobby");
+  renderLobby();
+
+  try { await clientReconnectOnce(); toast("Reconnected to " + roomCode); }
+  catch (_) { scheduleClientReconnect(); }
+}
+
+function tryResumeSession() {
+  const s = loadSession();
+  if (!s || !s.roomCode) return;
+  // Only auto-resume after an *unclean* reload — sessions are cleared on Leave.
+  try {
+    if (s.isHost && s.hostState) resumeHost(s);
+    else if (!s.isHost)          resumeClient(s);
+  } catch (_) { clearSession(); }
+}
+
 /* ── Boot ── */
 setTheme("dark");
+tryResumeSession();
