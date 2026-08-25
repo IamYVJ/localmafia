@@ -8,17 +8,24 @@
  * Message protocol (Host ↔ Client):
  *
  *   Client → Host
- *     { t:"join",  name, v }
- *     { t:"night", action, targetId | null }
+ *     { t:"join",  name, pid, spectator, v }
+ *     { t:"night", action, targetId | null }       ← one action per night, final
  *     { t:"vote",  targetId | null }
- *     { t:"ping",  ts }
+ *     { t:"leave" }                                ← graceful exit (vs. a drop)
  *
  *   Host → Client
- *     { t:"joined",       roomCode, youId }
+ *     { t:"joined",       roomCode, youId, spectator? }
  *     { t:"state",        state }                  ← public snapshot
- *     { t:"private_role", role }                   ← private to each player
+ *     { t:"private_role", role, shots }            ← private to each player
+ *     { t:"role_info",    shots }                  ← private extras refresh
+ *     { t:"mafia_team",   names }                  ← private to Mafia only
  *     { t:"investigation",targetName, result }     ← private to Police only
  *     { t:"toast",        msg }
+ *     { t:"host_closing" }                         ← room is shutting down
+ *
+ * The public snapshot never contains roles until the game ends. The only
+ * per-player fields in it live under `state.you` (id, nightActed,
+ * nightTargetId) and are sent solely to that player.
  ********************************************************************/
 
 "use strict";
@@ -268,6 +275,32 @@ function buildEmptyVote() {
 }
 
 /**
+ * Which night bag each acting role writes into. A role missing from this map
+ * has no night action at all (Citizen, Mayor, Jester).
+ * Presence of a player's id in their bag == "power already used tonight",
+ * which is what makes every power strictly once-per-night.
+ */
+const ROLE_NIGHT_BAG = {
+  Mafia:     "mafia",
+  Dentist:   "dentist",
+  Angel:     "angel",
+  Police:    "police",
+  Vigilante: "vigilante",
+};
+
+/** The night bag for a player's role, or null if they have no night action. */
+function hostNightBagFor(playerId) {
+  const role = hostState.players[playerId]?.role;
+  return (role && ROLE_NIGHT_BAG[role]) || null;
+}
+
+/** Has this player already used their power during the current night? */
+function hostHasActedTonight(playerId) {
+  const bag = hostNightBagFor(playerId);
+  return !!bag && Object.hasOwn(hostState.night[bag], playerId);
+}
+
+/**
  * Append a line to the game log.
  * `secret` entries are bookkeeping that could reveal roles (e.g. which player
  * acted at night). They are kept host-side for debugging but are stripped from
@@ -329,6 +362,26 @@ function buildPublicSnapshotFor(peerId) {
     voteTallies: null,
     you: {id: peerId},
   };
+
+  // Private-to-this-player night bookkeeping: whether their once-per-night power
+  // has been spent, and on whom. Sent only in *their* snapshot, so it leaks
+  // nothing — and it means a reconnecting player still sees their locked choice.
+  if (hostState.phase === "night") {
+    const acted = hostHasActedTonight(peerId);
+    ps.you.nightActed    = acted;
+    ps.you.nightTargetId = acted ? (hostState.night[hostNightBagFor(peerId)][peerId] ?? null) : null;
+
+    // A Mafia sees their partners' locked picks (names only, private to them) so
+    // a two-Mafia team can converge on one target instead of splitting the kill.
+    if (hostState.players[peerId]?.role === "Mafia") {
+      ps.you.mafiaPicks = Object.entries(hostState.night.mafia)
+        .filter(([id]) => id !== peerId && hostState.players[id]?.role === "Mafia")
+        .map(([id, tid]) => ({
+          by:     hostState.players[id]?.name || "?",
+          target: tid ? (hostState.players[tid]?.name || "?") : null,
+        }));
+    }
+  }
 
   const revealRoles = hostState.phase === "ended";
   for (const p of Object.values(hostState.players)) {
@@ -399,6 +452,20 @@ function hostSendRoleInfo(playerId) {
   if (playerId === hostState.hostPid) { myVigilanteShots = p.vigilanteShots; return; }
   const conn = conns.get(playerId);
   if (conn && conn.open) conn.send({t: "role_info", shots: p.vigilanteShots});
+}
+
+/** Send a one-off notice to a single player (works whether they're remote or the host device). */
+function hostSendToast(playerId, msg) {
+  if (playerId === hostState.hostPid) { toast(msg); return; }
+  const conn = conns.get(playerId);
+  if (conn && conn.open) conn.send({t: "toast", msg});
+}
+
+/** Private notice to the living Mafia only — never touches the public log. */
+function hostToastMafia(msg) {
+  for (const p of Object.values(hostState.players)) {
+    if (p.alive && p.role === "Mafia") hostSendToast(p.id, msg);
+  }
 }
 
 function hostSendInvestigation(policeId, targetId) {
@@ -661,6 +728,13 @@ function hostHandleNightAction(fromId, action, targetId) {
 
   if (!valid || actor.role !== valid.role) return;
 
+  // One power, once per night. The first submission (including a Skip) locks in —
+  // no re-picking or switching targets until the next night begins.
+  if (hostState.night.resolved || hostHasActedTonight(fromId)) {
+    hostSendToast(fromId, "You've already used your power tonight.");
+    return;
+  }
+
   // Vigilante can only fire if they still have a bullet (skipping is always allowed).
   if (action === "vigilante_shoot" && targetId !== null && (actor.vigilanteShots || 0) <= 0) return;
 
@@ -703,7 +777,11 @@ function hostMaybeResolveNight(force = false) {
 
   hostState.night.resolved = true;
 
-  const mafiaTarget     = pluralityPick(Object.values(hostState.night.mafia).filter(Boolean));
+  // A two-Mafia team votes on the kill. Majority wins; a 1–1 split is broken by
+  // coin flip so the night is never wasted (they can't renegotiate once locked).
+  const mafiaVotes      = Object.values(hostState.night.mafia).filter(Boolean);
+  const mafiaSplit      = new Set(mafiaVotes).size > 1;
+  const mafiaTarget     = pluralityPick(mafiaVotes, "random");
   const angelTarget     = firstNonNull(Object.values(hostState.night.angel));
   const silenceTarget   = firstNonNull(Object.values(hostState.night.dentist));
   const vigilanteTarget = firstNonNull(Object.values(hostState.night.vigilante));
@@ -729,6 +807,13 @@ function hostMaybeResolveNight(force = false) {
 
   const killedIds = [...attacked].filter(id => hostState.players[id]?.alive);
   for (const id of killedIds) hostState.players[id].alive = false;
+
+  // Let the Mafia know a coin flip settled their disagreement (private — the
+  // town must not learn there is more than one Mafia).
+  if (mafiaSplit && mafiaTarget) {
+    // Says who the flip chose, not who died — the Angel may still have saved them.
+    hostToastMafia(`Your team was split — the coin fell on ${hostState.players[mafiaTarget]?.name || "someone"}.`);
+  }
 
   // Announce results
   hostState.day += 1;
@@ -789,16 +874,22 @@ function hostMaybeAutoCloseVote() {
 }
 
 /* ─ small helpers ─ */
-function pluralityPick(arr) {
+/**
+ * Return the most-chosen entry in `arr`.
+ * `tieBreak` decides what happens when the leaders are level:
+ *   "none"   → null (nobody wins the tie)
+ *   "random" → one of the tied leaders, chosen at random
+ * The Mafia kill uses "random" so a split team still kills someone rather than
+ * silently wasting the night — they have no way to negotiate once locked in.
+ */
+function pluralityPick(arr, tieBreak = "none") {
   if (!arr.length) return null;
   const count = {};
   for (const x of arr) count[x] = (count[x] || 0) + 1;
-  let best = null, bestC = 0, tie = false;
-  for (const [id, c] of Object.entries(count)) {
-    if (c > bestC)      { best = id; bestC = c; tie = false; }
-    else if (c === bestC) tie = true;
-  }
-  return tie ? null : best;
+  const max = Math.max(...Object.values(count));
+  const top = Object.keys(count).filter(k => count[k] === max);
+  if (top.length === 1) return top[0];
+  return tieBreak === "random" ? top[Math.floor(Math.random() * top.length)] : null;
 }
 function firstNonNull(arr) {
   for (const x of arr) if (x) return x;
@@ -1380,6 +1471,17 @@ function renderActionArea() {
       el("span", {text:"🔫"}),
       el("span", {text: `Your Mafia: ${myMafiaTeam.join(", ")}`}),
     ]));
+
+    // Partners' locked picks, so the team can agree on one target. If you both
+    // name different people the kill is settled by coin flip.
+    for (const pick of (publicState?.you?.mafiaPicks || [])) {
+      area.appendChild(el("div", {class:"chip"}, [
+        el("span", {text:"🎯"}),
+        el("span", {text: pick.target
+          ? `${pick.by} is targeting ${pick.target}`
+          : `${pick.by} chose to skip tonight`}),
+      ]));
+    }
   }
 
   if (myPoliceMemo) {
@@ -1402,11 +1504,11 @@ function renderActionArea() {
     }
 
     const specMap = {
-      Mafia:     {action:"mafia_kill",         title:"Choose a target to kill",       note:"Only the Mafia kills at night.", canSelf:false},
-      Dentist:   {action:"dentist_silence",     title:"Choose a target to silence",    note:"Silenced players can't vote tomorrow.", canSelf:false},
-      Angel:     {action:"angel_protect",       title:"Choose someone to protect",     note:"Protection prevents a night kill.", canSelf:true},
-      Police:    {action:"police_investigate",  title:"Choose someone to investigate", note:"You'll learn Mafia or Innocent (private).", canSelf:false},
-      Vigilante: {action:"vigilante_shoot",     title:"Choose someone to shoot",       note:"One bullet for the whole game. Choose wisely — or Skip.", canSelf:false},
+      Mafia:     {action:"mafia_kill",         title:"Choose a target to kill",       note:"Only the Mafia kills at night.", canSelf:false, done:"You marked"},
+      Dentist:   {action:"dentist_silence",     title:"Choose a target to silence",    note:"Silenced players can't vote tomorrow.", canSelf:false, done:"You silenced"},
+      Angel:     {action:"angel_protect",       title:"Choose someone to protect",     note:"Protection prevents a night kill.", canSelf:true, done:"You are protecting"},
+      Police:    {action:"police_investigate",  title:"Choose someone to investigate", note:"You'll learn Mafia or Innocent (private).", canSelf:false, done:"You investigated"},
+      Vigilante: {action:"vigilante_shoot",     title:"Choose someone to shoot",       note:"One bullet for the whole game. Choose wisely — or Skip.", canSelf:false, done:"You shot at"},
     };
 
     const spec = specMap[role];
@@ -1425,11 +1527,31 @@ function renderActionArea() {
       return;
     }
 
+    // One power per night: once it's been used the choice is locked in.
+    if (publicState?.you?.nightActed) {
+      const tid    = publicState.you.nightTargetId ?? null;
+      const target = tid ? players.find(p => p.id === tid) : null;
+      area.appendChild(el("div", {class:"chip"}, [
+        el("span", {text: roleIcon(role)}),
+        el("span", {text: target
+          ? `${spec.done} ${target.name}.`
+          : "You chose to sit this night out."}),
+      ]));
+      area.appendChild(el("div", {class:"hint",
+        text:"Your power is spent for tonight — it recharges at the next nightfall. Waiting for the others…"}));
+      return;
+    }
+
     area.appendChild(el("div", {class:"chip"}, [
       el("span", {text: roleIcon(role)}),
       el("span", {text: spec.title}),
     ]));
     area.appendChild(el("div", {class:"hint", text: spec.note}));
+    area.appendChild(el("div", {class:"hint", text:"One action per night — your pick is final, so choose carefully."}));
+    if (role === "Mafia" && myMafiaTeam.length) {
+      area.appendChild(el("div", {class:"hint",
+        text:"Your team votes on the kill: matching names is a sure hit, a split is settled by coin flip."}));
+    }
 
     const grid = el("div", {class:"grid"});
     for (const p of players) {
@@ -1508,12 +1630,15 @@ function renderActionArea() {
    ═══════════════════════════════════════════ */
 function submitNight(action, targetId) {
   if (!publicState || publicState.phase !== "night") return;
+  // Local mirror of the host's once-per-night rule — stops double-taps and
+  // gives instant feedback instead of a round-trip rejection.
+  if (publicState.you?.nightActed) { toast("You've already used your power tonight."); return; }
   if (isHost) {
     hostHandleNightAction(myId, action, targetId);
-    toast("Night action submitted.");
+    toast("Night action locked in.");
   } else if (hostConn?.open) {
     hostConn.send({t:"night", action, targetId});
-    toast("Night action sent.");
+    toast("Night action locked in.");
   }
 }
 
