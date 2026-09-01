@@ -130,6 +130,19 @@
               </div>
             </div>
           </details>
+
+          <!--
+            Visitor counter footnote. Deliberately inside .hero-wrap:
+              · it is not a descendant of any container that render*() wipes with
+                innerHTML (#lobbyPlayers, #narrator, #gamePlayers, #tvPlayers,
+                #tvNarrator, #actionArea), so a redraw can never destroy it;
+              · living in #viewHome means .view{display:none} hides it on the
+                Lobby/Game/TV views for free, with no extra CSS.
+            Starts `hidden`; only revealed once a real number arrives.
+          -->
+          <p class="visitor-counter" hidden>
+            <span id="visitor-count" class="visitor-count">—</span> visitors
+          </p>
         </div>
       </section>
 
@@ -252,5 +265,18 @@
 
   <!-- App logic -->
   <script src="script.js"></script>
+
+  <!--
+    Analytics beacon. NOTE: this tag is parsed *after* script.js, which is a
+    synchronous script — so it does not exist in the DOM while script.js runs.
+    showVisitorCount() therefore waits for DOMContentLoaded before reading
+    data-goatcounter off this tag; calling it inline would find null and leave
+    the counter invisible forever.
+  -->
+  <script
+    data-goatcounter="https://yvj.goatcounter.com/count"
+    async
+    src="//gc.zgo.at/count.js">
+  </script>
 </body>
 </html>

@@ -243,6 +243,20 @@ header {
   color: var(--faint);
 }
 
+/* ── Visitor counter (footnote) ── */
+/* No `display` property here, on purpose. The global [hidden] rule must stay in
+   charge: any visitor whose adblocker eats the counter request would otherwise
+   be shown a bare "— visitors". Same 26px rhythm / mono / 11.5px / .06em as
+   .fineprint above, so it reads as the next line of fine print, not a new block. */
+.visitor-counter {
+  margin: 26px 0 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .06em;
+  color: var(--faint);
+}
+.visitor-count { color: var(--muted); }
+
 /* ── How to play (collapsible) ── */
 .howto {
   max-width: 460px;

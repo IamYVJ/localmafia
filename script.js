@@ -1982,6 +1982,78 @@ function tryResumeSession() {
   } catch (_) { clearSession(); }
 }
 
+/* ═══════════════════════════════════════════
+   Visitor counter (decorative footnote)
+   ═══════════════════════════════════════════ */
+
+/**
+ * Path queried for the visitor count. PINNED rather than read from
+ * location.pathname, because this deploys to GitHub Pages where the same page
+ * answers on both "/localmafia/" and "/localmafia/index.html" — two separate
+ * GoatCounter buckets. Reading the path live would split the count and show
+ * index.html visitors a 404 (i.e. no counter at all).
+ *
+ * The asymmetry is deliberate and matches how the beacon already behaves for
+ * tracking params: count.js files a view under whatever path the visitor
+ * actually arrived on, while everyone is *shown* the aggregate for this one
+ * canonical path.
+ *
+ * Not affected by view switching — showView() only toggles a CSS class, so
+ * location.pathname never changes as you navigate this app.
+ */
+const COUNTER_PATH = "/localmafia/";
+
+/**
+ * Fixed start date, never a relative period like `week`/`year` — those are
+ * rolling windows that would silently stop being an all-time count.
+ *
+ * It is pinned because a path with no data yet answers 404 and GoatCounter
+ * caches that 404 for up to four hours, so a bare URL can sit on "no data" for
+ * hours after the first real visit lands. A distinct cache key sidesteps a 404
+ * that was cached before any data existed.
+ *
+ * Safe as an all-time count: this beacon did not exist before today, so the
+ * "/localmafia/" path has no pageviews predating this date.
+ */
+const COUNTER_START = "2026-01-01";
+
+function showVisitorCount() {
+  const box = document.querySelector(".visitor-counter");
+  const out = document.getElementById("visitor-count");
+  if (!box || !out) return;
+
+  // Derive the host from the beacon tag so the site code lives in one place.
+  const tag = document.querySelector("script[data-goatcounter]");
+  const endpoint = tag && tag.dataset.goatcounter;
+  if (!endpoint) return;
+
+  // Per-path, NOT /counter/TOTAL.json — TOTAL sums every page on the
+  // GoatCounter site and would report other projects' traffic as this one's.
+  const base = endpoint.replace(/\/count$/, "");
+  const url  = `${base}/counter/${encodeURIComponent(COUNTER_PATH)}.json?start=${COUNTER_START}`;
+
+  fetch(url)
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error("bad status"))))
+    .then((data) => {
+      // `count` arrives pre-formatted with thousands separators ("1,234").
+      if (data && data.count != null) {
+        out.textContent = String(data.count);
+        box.hidden = false;
+      }
+    })
+    .catch(() => { /* decorative: stay hidden on adblock / offline / 404 */ });
+}
+
 /* ── Boot ── */
 setTheme("dark");
 tryResumeSession();
+
+// The beacon <script data-goatcounter> sits after this file in index.html and
+// this is a synchronous script, so the tag is not in the DOM yet. Wait for the
+// parser to finish or the endpoint lookup returns null and the counter never
+// appears. (Guarded both ways in case the tag order ever changes.)
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", showVisitorCount, {once: true});
+} else {
+  showVisitorCount();
+}
